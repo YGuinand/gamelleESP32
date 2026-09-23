@@ -9,6 +9,8 @@
 #define PIN_BTN_JAUNE 14
 #define PIN_BTN_VERT  12
 #define PIN_BTN_BLEU  15
+#define PIN_BTN_JACK  23
+#define PIN_BTN_FDC   16
 
 #define PIN_LED_JAUNE 4
 #define PIN_LED_VERT  2
@@ -27,7 +29,9 @@ struct Button {
 Button buttons[] = {
     {PIN_BTN_JAUNE, 1, LOW, 0},
     {PIN_BTN_VERT,  2, LOW, 0},
-    {PIN_BTN_BLEU,  3, LOW, 0}
+    {PIN_BTN_BLEU,  3, LOW, 0},
+    {PIN_BTN_JACK,  4, LOW, 0},
+    {PIN_BTN_FDC,   5, LOW, 0}
 };
 const uint8_t numButtons = sizeof(buttons) / sizeof(Button);
 const unsigned long debounceDelay = 50;
@@ -97,9 +101,10 @@ void setup() {
     lcd.setCursor(0, 0);
     lcd.print("IUT de Cachan");
 
-    pinMode(PIN_BTN_JAUNE, INPUT);
-    pinMode(PIN_BTN_VERT, INPUT);
-    pinMode(PIN_BTN_BLEU, INPUT);
+    // Initialisation de toutes les broches des boutons
+    for (uint8_t i = 0; i < numButtons; i++) {
+        pinMode(buttons[i].pin, INPUT);
+    }
 
     pinMode(PIN_LED_JAUNE, OUTPUT);
     pinMode(PIN_LED_VERT, OUTPUT);
