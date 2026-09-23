@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <rgb_lcd.h>
+#include <ESP32Encoder.h> // Bibliothèque utilisant le périphérique matériel PCNT
 
 // Configuration des broches
 #define PIN_SDA 21
@@ -24,6 +25,10 @@
 
 // Instance de l'écran LCD Grove RGB
 rgb_lcd lcd;
+
+// Instances matérielles des codeurs (Périphérique PCNT)
+ESP32Encoder encoderA;
+ESP32Encoder encoderB;
 
 // Structures pour la gestion des boutons (anti-rebond logiciel)
 struct Button {
@@ -61,9 +66,9 @@ Potentiometer pots[] = {
 };
 const uint8_t numPots = sizeof(pots) / sizeof(Potentiometer);
 
-// Variables globales pour le rythme d'échantillonnage analogique (20Hz max -> 50ms)
-unsigned long lastPotTime = 0;
-const unsigned long potInterval = 50; 
+// Variables globales pour les rythmes d'échantillonnage (20Hz max -> 50ms)
+unsigned long lastAnalogAndEncoderTime = 0;
+const unsigned long loopInterval = 50; 
 
 // État actuel du rétroéclairage
 uint8_t currentR = 255;
@@ -73,7 +78,7 @@ uint8_t currentB = 255;
 // Variables pour la réception série et le Watchdog moteur
 String serialBuffer = "";
 unsigned long lastMotorCmdTime = 0;
-const unsigned long motorTimeout = 1000; // 1 seconde de timeout
+const unsigned long motorTimeout = 1000; 
 bool motorsActive = false;
 
 void updateBacklight() {
@@ -110,7 +115,6 @@ void parseSerialCommand(String cmd) {
     if (cmd.startsWith("MA")) {
         int duty = cmd.substring(2).toInt();
         if (duty >= 0 && duty <= 1023) {
-            // API ledc d'Arduino Core 3.x : Pilotage direct par la broche GPIO
             ledcWrite(PIN_PWM_MOTEUR_A, duty);
             lastMotorCmdTime = millis();
             motorsActive = true;
@@ -119,11 +123,18 @@ void parseSerialCommand(String cmd) {
     else if (cmd.startsWith("MB")) {
         int duty = cmd.substring(2).toInt();
         if (duty >= 0 && duty <= 1023) {
-            // API ledc d'Arduino Core 3.x : Pilotage direct par la broche GPIO
             ledcWrite(PIN_PWM_MOTEUR_B, duty);
             lastMotorCmdTime = millis();
             motorsActive = true;
         }
+    }
+    else if (cmd.startsWith("CA")) {
+        long value = cmd.substring(2).toInt();
+        encoderA.setCount(value);
+    }
+    else if (cmd.startsWith("CB")) {
+        long value = cmd.substring(2).toInt();
+        encoderB.setCount(value);
     }
 }
 
@@ -139,7 +150,6 @@ void setup() {
     lcd.setCursor(0, 0);
     lcd.print("IUT de Cachan");
 
-    // Configuration des boutons
     for (uint8_t i = 0; i < numButtons; i++) {
         pinMode(buttons[i].pin, INPUT);
     }
@@ -150,23 +160,26 @@ void setup() {
     digitalWrite(PIN_LED_JAUNE, LOW);
     digitalWrite(PIN_LED_VERT, LOW);
 
-    // Configuration des potentiomètres
     for (uint8_t i = 0; i < numPots; i++) {
         pinMode(pots[i].pin, ANALOG);
     }
 
-    // API ledc d'Arduino Core 3.x : Configuration et attachement combinés sur le GPIO
     ledcAttach(PIN_PWM_MOTEUR_A, PWM_FREQ, PWM_RESOLUTION);
     ledcAttach(PIN_PWM_MOTEUR_B, PWM_FREQ, PWM_RESOLUTION);
-
-    // Initialisation des rapports cycliques à 0
     ledcWrite(PIN_PWM_MOTEUR_A, 0);
     ledcWrite(PIN_PWM_MOTEUR_B, 0);
     lastMotorCmdTime = millis();
+
+    // Correction de l'énumération pour Arduino Core 3.x
+    ESP32Encoder::useInternalWeakPullResistors = puType::up;
+    
+    encoderA.attachFullQuad(17, 18);
+    encoderB.attachFullQuad(19, 13);
+    encoderA.setCount(0);
+    encoderB.setCount(0);
 }
 
 void loop() {
-    // Lecture de la liaison série et reconstruction des commandes
     while (Serial.available() > 0) {
         char c = Serial.read();
         if (c == 0x0A) { 
@@ -177,14 +190,12 @@ void loop() {
         }
     }
 
-    // Watchdog de sécurité sur les moteurs (1 seconde sans commande)
     if (motorsActive && (millis() - lastMotorCmdTime >= motorTimeout)) {
         ledcWrite(PIN_PWM_MOTEUR_A, 0);
         ledcWrite(PIN_PWM_MOTEUR_B, 0);
         motorsActive = false;
     }
 
-    // Gestion des boutons avec anti-rebond
     for (uint8_t i = 0; i < numButtons; i++) {
         bool reading = (digitalRead(buttons[i].pin) == HIGH);
 
@@ -204,9 +215,8 @@ void loop() {
         }
     }
 
-    // Lecture séquentielle de tous les potentiomètres à la fréquence globale de 20 Hz (50 ms)
-    if (millis() - lastPotTime >= potInterval) {
-        lastPotTime = millis();
+    if (millis() - lastAnalogAndEncoderTime >= loopInterval) {
+        lastAnalogAndEncoderTime = millis();
 
         for (uint8_t i = 0; i < numPots; i++) {
             int currentPotValue = analogRead(pots[i].pin);
@@ -218,6 +228,14 @@ void loop() {
                 Serial.write(0x0A);
             }
         }
+
+        Serial.print("CA");
+        Serial.print((int32_t)encoderA.getCount());
+        Serial.write(0x0A);
+
+        Serial.print("CB");
+        Serial.print((int32_t)encoderB.getCount());
+        Serial.write(0x0A);
     }
 
     digitalWrite(PIN_LED_JAUNE, digitalRead(PIN_BTN_JAUNE));
