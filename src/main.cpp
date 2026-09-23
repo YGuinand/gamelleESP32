@@ -15,6 +15,13 @@
 #define PIN_LED_JAUNE 4
 #define PIN_LED_VERT  2
 
+#define PIN_PWM_MOTEUR_A 26
+#define PIN_PWM_MOTEUR_B 27
+
+// Paramètres PWM conformes à l'API ESP32 Arduino Core 3.x
+#define PWM_FREQ       20000
+#define PWM_RESOLUTION 10
+
 // Instance de l'écran LCD Grove RGB
 rgb_lcd lcd;
 
@@ -63,6 +70,12 @@ uint8_t currentR = 255;
 uint8_t currentG = 255;
 uint8_t currentB = 255;
 
+// Variables pour la réception série et le Watchdog moteur
+String serialBuffer = "";
+unsigned long lastMotorCmdTime = 0;
+const unsigned long motorTimeout = 1000; // 1 seconde de timeout
+bool motorsActive = false;
+
 void updateBacklight() {
     if (digitalRead(PIN_BTN_JAUNE) == HIGH) {
         if (currentR != 255 || currentG != 255 || currentB != 0) {
@@ -90,8 +103,33 @@ void updateBacklight() {
     }
 }
 
+void parseSerialCommand(String cmd) {
+    cmd.trim(); 
+    if (cmd.length() < 3) return;
+
+    if (cmd.startsWith("MA")) {
+        int duty = cmd.substring(2).toInt();
+        if (duty >= 0 && duty <= 1023) {
+            // API ledc d'Arduino Core 3.x : Pilotage direct par la broche GPIO
+            ledcWrite(PIN_PWM_MOTEUR_A, duty);
+            lastMotorCmdTime = millis();
+            motorsActive = true;
+        }
+    } 
+    else if (cmd.startsWith("MB")) {
+        int duty = cmd.substring(2).toInt();
+        if (duty >= 0 && duty <= 1023) {
+            // API ledc d'Arduino Core 3.x : Pilotage direct par la broche GPIO
+            ledcWrite(PIN_PWM_MOTEUR_B, duty);
+            lastMotorCmdTime = millis();
+            motorsActive = true;
+        }
+    }
+}
+
 void setup() {
     Serial.begin(115200);
+    serialBuffer.reserve(32);
 
     Wire.begin(PIN_SDA, PIN_SCL);
 
@@ -101,7 +139,7 @@ void setup() {
     lcd.setCursor(0, 0);
     lcd.print("IUT de Cachan");
 
-    // Initialisation de toutes les broches des boutons
+    // Configuration des boutons
     for (uint8_t i = 0; i < numButtons; i++) {
         pinMode(buttons[i].pin, INPUT);
     }
@@ -112,15 +150,38 @@ void setup() {
     digitalWrite(PIN_LED_JAUNE, LOW);
     digitalWrite(PIN_LED_VERT, LOW);
 
-    // Initialisation de toutes les broches des potentiomètres
+    // Configuration des potentiomètres
     for (uint8_t i = 0; i < numPots; i++) {
         pinMode(pots[i].pin, ANALOG);
     }
+
+    // API ledc d'Arduino Core 3.x : Configuration et attachement combinés sur le GPIO
+    ledcAttach(PIN_PWM_MOTEUR_A, PWM_FREQ, PWM_RESOLUTION);
+    ledcAttach(PIN_PWM_MOTEUR_B, PWM_FREQ, PWM_RESOLUTION);
+
+    // Initialisation des rapports cycliques à 0
+    ledcWrite(PIN_PWM_MOTEUR_A, 0);
+    ledcWrite(PIN_PWM_MOTEUR_B, 0);
+    lastMotorCmdTime = millis();
 }
 
 void loop() {
+    // Lecture de la liaison série et reconstruction des commandes
     while (Serial.available() > 0) {
-        Serial.read(); 
+        char c = Serial.read();
+        if (c == 0x0A) { 
+            parseSerialCommand(serialBuffer);
+            serialBuffer = "";
+        } else if (c != 0x0D) { 
+            serialBuffer += c;
+        }
+    }
+
+    // Watchdog de sécurité sur les moteurs (1 seconde sans commande)
+    if (motorsActive && (millis() - lastMotorCmdTime >= motorTimeout)) {
+        ledcWrite(PIN_PWM_MOTEUR_A, 0);
+        ledcWrite(PIN_PWM_MOTEUR_B, 0);
+        motorsActive = false;
     }
 
     // Gestion des boutons avec anti-rebond
@@ -150,7 +211,6 @@ void loop() {
         for (uint8_t i = 0; i < numPots; i++) {
             int currentPotValue = analogRead(pots[i].pin);
 
-            // Vérification du seuil de tolérance de +/- 1 par rapport à la dernière valeur envoyée
             if (abs(currentPotValue - pots[i].lastValue) > 1) {
                 pots[i].lastValue = currentPotValue;
                 Serial.print(pots[i].prefix);
