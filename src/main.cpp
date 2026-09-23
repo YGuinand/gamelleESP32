@@ -30,6 +30,9 @@ rgb_lcd lcd;
 ESP32Encoder encoderA;
 ESP32Encoder encoderB;
 
+// Chaine de caractères globale stockant le Numéro de Série unique
+char serialNumberStr[15];
+
 // Structures pour la gestion des boutons (anti-rebond logiciel)
 struct Button {
     uint8_t pin;
@@ -81,6 +84,14 @@ unsigned long lastMotorCmdTime = 0;
 const unsigned long motorTimeout = 1000; 
 bool motorsActive = false;
 
+// Fonction de génération du numéro de série à partir de l'eFuse MAC
+void initSerialNumber() {
+    uint64_t mac = ESP.getEfuseMac(); // Récupère l'adresse MAC unique codée sur 48 bits (6 octets)
+    // Conversion en chaîne hexadécimale brute (12 caractères)
+    snprintf(serialNumberStr, sizeof(serialNumberStr), "%04X%08X", 
+             (uint16_t)(mac >> 32), (uint32_t)mac);
+}
+
 void updateBacklight() {
     if (digitalRead(PIN_BTN_JAUNE) == HIGH) {
         if (currentR != 255 || currentG != 255 || currentB != 0) {
@@ -110,7 +121,15 @@ void updateBacklight() {
 
 void parseSerialCommand(String cmd) {
     cmd.trim(); 
-    if (cmd.length() < 3) return;
+    if (cmd.length() < 2) return;
+
+    // Commande Demande Numéro de Série
+    if (cmd == "SN") {
+        Serial.print("SN");
+        Serial.print(serialNumberStr);
+        Serial.write(0x0A);
+        return;
+    }
 
     if (cmd.startsWith("MA")) {
         int duty = cmd.substring(2).toInt();
@@ -142,13 +161,24 @@ void setup() {
     Serial.begin(115200);
     serialBuffer.reserve(32);
 
+    // Initialisation et génération immédiate du numéro de série
+    initSerialNumber();
+
+    // Envoi du numéro de série sur la liaison série au boot
+    Serial.print("SN");
+    Serial.print(serialNumberStr);
+    Serial.write(0x0A);
+
     Wire.begin(PIN_SDA, PIN_SCL);
 
     lcd.begin(16, 2);
     lcd.setRGB(255, 255, 255);
     
+    // Affichage des messages fixes sur l'écran LCD
     lcd.setCursor(0, 0);
     lcd.print("IUT de Cachan");
+    lcd.setCursor(0, 1);
+    lcd.print(serialNumberStr); // Affichage sur la 2ème ligne
 
     for (uint8_t i = 0; i < numButtons; i++) {
         pinMode(buttons[i].pin, INPUT);
@@ -170,7 +200,6 @@ void setup() {
     ledcWrite(PIN_PWM_MOTEUR_B, 0);
     lastMotorCmdTime = millis();
 
-    // Correction de l'énumération pour Arduino Core 3.x
     ESP32Encoder::useInternalWeakPullResistors = puType::up;
     
     encoderA.attachFullQuad(17, 18);
