@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Banc de Diagnostic - IUT de Cachan</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f6;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        h1, h2 { color: #0056b3; margin-top: 0; }
+        .btn {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+            transition: background 0.2s;
+        }
+        .btn:hover { background-color: #0056b3; }
+        .btn-success { background-color: #28a745; }
+        .btn-success:hover { background-color: #218838; }
+        .btn-danger { background-color: #dc3545; }
+        .btn-danger:hover { background-color: #c82333; }
+        .btn-warning { background-color: #ffc107; color: #212529; }
+        .btn-warning:hover { background-color: #e0a800; }
+        .btn:disabled { background-color: #cccccc; cursor: not-allowed; }
+
+        .status-box {
+            background-color: #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            font-size: 16px;
+        }
+        .step-card {
+            border: 2px solid #dee2e6;
+            padding: 20px;
+            border-radius: 5px;
+            background-color: #fff;
+            margin-bottom: 20px;
+        }
+        .step-card.active {
+            border-color: #007bff;
+            background-color: #f8f9fa;
+        }
+        .instruction {
+            font-size: 18px;
+            font-weight: bold;
+            color: #495057;
+            margin-bottom: 15px;
+        }
+        .live-data {
+            font-family: monospace;
+            background: #212529;
+            color: #28a745;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            white-space: pre-wrap;
+            font-size: 13px;
+        }
+        #reportArea {
+            white-space: pre-wrap;
+            background: #f8f9fa;
+            border: 1px solid #ced4da;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+            margin-top: 20px;
+            display: none;
+        }
+        .action-zone {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #dee2e6;
+        }
+        #manualQuestion { font-size: 16px; margin-bottom: 10px; }
+
+        /* --- Barres visuelles pour les potentiomètres --- */
+        .pot-bar-container {
+            margin: 10px 0;
+            padding: 8px 10px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 5px;
+        }
+        .pot-bar-container.pot-bar-small { margin: 4px 0; padding: 6px 10px; }
+        .pot-bar-head {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            color: #ced4da;
+            margin-bottom: 5px;
+        }
+        .pot-bar-container.pot-bar-small .pot-bar-head { font-size: 12px; }
+        .pot-bar-track {
+            position: relative;
+            height: 22px;
+            background: #343a40;
+            border-radius: 4px;
+            border: 1px solid #495057;
+            overflow: hidden;
+        }
+        .pot-bar-container.pot-bar-small .pot-bar-track { height: 14px; }
+        .pot-bar-range {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            background: linear-gradient(to right,
+                rgba(40,167,69,0.20),
+                rgba(40,167,69,0.55),
+                rgba(40,167,69,0.20));
+        }
+        .pot-bar-cursor {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: #ffc107;
+            box-shadow: 0 0 6px rgba(255,193,7,0.9);
+            border-radius: 2px;
+        }
+        .pot-bar-foot {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #adb5bd;
+            margin-top: 3px;
+        }
+
+        /* --- Overlay de flashage --- */
+        #flashOverlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.78);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        #flashOverlay.visible { display: flex; }
+        #flashOverlay .flash-box {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            max-width: 540px;
+            width: 90%;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+        }
+        #flashOverlay h2 { color: #0056b3; margin-top: 0; }
+        #flashOverlay .flash-bar-wrap {
+            background: #e9ecef;
+            height: 22px;
+            border-radius: 11px;
+            overflow: hidden;
+            margin-top: 15px;
+        }
+        #flashProgressBar {
+            background: linear-gradient(to right, #007bff, #28a745);
+            height: 100%;
+            width: 0%;
+            transition: width 0.2s;
+        }
+        #flashMessage {
+            font-family: monospace;
+            font-size: 14px;
+            color: #495057;
+            margin-top: 15px;
+            min-height: 20px;
+        }
+        #flashHint {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #856404;
+            margin-top: 15px;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Banc de Diagnostic Gamelle ESP32</h1>
+    <p>Ce script communique en direct avec l'ESP32 via l'API Web Serial.</p>
+
+    <div class="status-box">
+        <button id="btnConnect" class="btn">Établir la connexion avec l'ESP32</button>
+        <button id="btnDisconnect" class="btn btn-danger" disabled>Déconnecter</button>
+        <button id="btnFlash" class="btn btn-warning" disabled>Reflasher firmware.bin</button>
+        <span id="connStatus" style="margin-left: 15px; font-weight: bold; color: red;">Déconnecté</span>
+        <div style="margin-top: 10px;">
+            <strong>Numéro de Série Détecté (eFuse) :</strong>
+            <span id="lblSN" style="font-weight: bold; color: #dc3545;">Lecture en cours... (Veuillez connecter la carte)</span>
+        </div>
+    </div>
+
+    <div id="testZone" style="display:none;">
+        <div class="step-card active" id="stepCard">
+            <h2 id="stepTitle">Étape</h2>
+            <div class="instruction" id="stepInstruction">...</div>
+
+            <div class="action-zone">
+                <div id="manualActions" style="display:none;">
+                    <p id="manualQuestion">Est-ce que le comportement observé sur la carte est correct ?</p>
+                    <button id="btnYes" class="btn btn-success">OUI (Conforme)</button>
+                    <button id="btnNo" class="btn btn-danger">NON (Défaillant)</button>
+                </div>
+                <div id="autoActions">
+                    <p>En attente de validation automatique. Si un élément est défectueux ou intestable, vous pouvez forcer la fin de cette étape :</p>
+                    <button id="btnForceFail" class="btn btn-warning">Terminer l'étape (éléments non testés = défaut)</button>
+                </div>
+            </div>
+
+            <div class="live-data" id="stepLiveData">Données en attente...</div>
+        </div>
+    </div>
+
+    <div id="reportZone" style="display:none;">
+        <h2>Diagnostic Terminé</h2>
+        <button id="btnDownloadReport" class="btn btn-success">Télécharger le Rapport de Test (.txt)</button>
+        <button id="btnTestAnother" class="btn">Tester une autre carte</button>
+        <div id="reportArea"></div>
+    </div>
+</div>
+
+<!-- Overlay de flashage -->
+<div id="flashOverlay">
+    <div class="flash-box">
+        <h2>Reflashage du firmware</h2>
+        <div class="flash-bar-wrap"><div id="flashProgressBar"></div></div>
+        <div id="flashMessage">Initialisation…</div>
+        <div id="flashHint">
+            <strong>Sur les cartes sans auto-reset :</strong> si le blocage persiste,
+            maintenez le bouton <b>BOOT</b> enfoncé, appuyez brièvement sur <b>EN/RST</b>,
+            puis relâchez <b>BOOT</b> pour entrer en mode bootloader.
+        </div>
+    </div>
+</div>
+
+<!-- CryptoJS requis par esptool-js pour le calcul du MD5 -->
+<script src="https://cdn.jsdelivr.net/npm/crypto-js@4.2.0/crypto-js.min.js"></script>
+<script src="diagnostic.js"></script>
+</body>
+</html>

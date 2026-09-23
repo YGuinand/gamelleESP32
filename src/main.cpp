@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <rgb_lcd.h>
-#include <ESP32Encoder.h> // Bibliothèque utilisant le périphérique matériel PCNT
+#include <ESP32Encoder.h>
 
 // Configuration des broches
 #define PIN_SDA 21
@@ -23,6 +23,9 @@
 #define PWM_FREQ       20000
 #define PWM_RESOLUTION 10
 
+// Taille du filtre moyenne glissante (puissance de 2 pour optimisation)
+#define FILTER_SIZE 8
+
 // Instance de l'écran LCD Grove RGB
 rgb_lcd lcd;
 
@@ -31,7 +34,7 @@ ESP32Encoder encoderA;
 ESP32Encoder encoderB;
 
 // Chaine de caractères globale stockant le Numéro de Série unique
-char serialNumberStr[15];
+char serialNumberStr[13];
 
 // Structures pour la gestion des boutons (anti-rebond logiciel)
 struct Button {
@@ -51,21 +54,24 @@ Button buttons[] = {
 const uint8_t numButtons = sizeof(buttons) / sizeof(Button);
 const unsigned long debounceDelay = 50;
 
-// Structure pour la gestion des potentiomètres
+// Structure pour la gestion des potentiomètres avec filtrage par moyenne glissante
 struct Potentiometer {
     uint8_t pin;
     const char* prefix;
     int lastValue;
+    int history[FILTER_SIZE];
+    uint8_t historyIndex;
+    int runningSum;
 };
 
 Potentiometer pots[] = {
-    {25, "PA", -10},
-    {32, "PB", -10},
-    {33, "PC", -10},
-    {35, "PD", -10},
-    {34, "PE", -10},
-    {36, "PF", -10},
-    {39, "PG", -10}
+    {25, "PA", -10, {0}, 0, 0},
+    {32, "PB", -10, {0}, 0, 0},
+    {33, "PC", -10, {0}, 0, 0},
+    {35, "PD", -10, {0}, 0, 0},
+    {34, "PE", -10, {0}, 0, 0},
+    {36, "PF", -10, {0}, 0, 0},
+    {39, "PG", -10, {0}, 0, 0}
 };
 const uint8_t numPots = sizeof(pots) / sizeof(Potentiometer);
 
@@ -86,8 +92,7 @@ bool motorsActive = false;
 
 // Fonction de génération du numéro de série à partir de l'eFuse MAC
 void initSerialNumber() {
-    uint64_t mac = ESP.getEfuseMac(); // Récupère l'adresse MAC unique codée sur 48 bits (6 octets)
-    // Conversion en chaîne hexadécimale brute (12 caractères)
+    uint64_t mac = ESP.getEfuseMac();
     snprintf(serialNumberStr, sizeof(serialNumberStr), "%04X%08X", 
              (uint16_t)(mac >> 32), (uint32_t)mac);
 }
@@ -123,7 +128,6 @@ void parseSerialCommand(String cmd) {
     cmd.trim(); 
     if (cmd.length() < 2) return;
 
-    // Commande Demande Numéro de Série
     if (cmd == "SN") {
         Serial.print("SN");
         Serial.print(serialNumberStr);
@@ -161,10 +165,8 @@ void setup() {
     Serial.begin(115200);
     serialBuffer.reserve(32);
 
-    // Initialisation et génération immédiate du numéro de série
     initSerialNumber();
 
-    // Envoi du numéro de série sur la liaison série au boot
     Serial.print("SN");
     Serial.print(serialNumberStr);
     Serial.write(0x0A);
@@ -174,11 +176,10 @@ void setup() {
     lcd.begin(16, 2);
     lcd.setRGB(255, 255, 255);
     
-    // Affichage des messages fixes sur l'écran LCD
     lcd.setCursor(0, 0);
     lcd.print("IUT de Cachan");
     lcd.setCursor(0, 1);
-    lcd.print(serialNumberStr); // Affichage sur la 2ème ligne
+    lcd.print(serialNumberStr);
 
     for (uint8_t i = 0; i < numButtons; i++) {
         pinMode(buttons[i].pin, INPUT);
@@ -190,8 +191,15 @@ void setup() {
     digitalWrite(PIN_LED_JAUNE, LOW);
     digitalWrite(PIN_LED_VERT, LOW);
 
+    // Initialisation des potentiomètres et pré-remplissage de l'historique de filtrage
     for (uint8_t i = 0; i < numPots; i++) {
         pinMode(pots[i].pin, ANALOG);
+        int initialValue = analogRead(pots[i].pin);
+        pots[i].runningSum = initialValue * FILTER_SIZE;
+        for (uint8_t j = 0; j < FILTER_SIZE; j++) {
+            pots[i].history[j] = initialValue;
+        }
+        pots[i].lastValue = initialValue;
     }
 
     ledcAttach(PIN_PWM_MOTEUR_A, PWM_FREQ, PWM_RESOLUTION);
@@ -247,13 +255,26 @@ void loop() {
     if (millis() - lastAnalogAndEncoderTime >= loopInterval) {
         lastAnalogAndEncoderTime = millis();
 
+        // Lecture, filtrage par moyenne glissante et envoi des potentiomètres
         for (uint8_t i = 0; i < numPots; i++) {
-            int currentPotValue = analogRead(pots[i].pin);
+            int rawValue = analogRead(pots[i].pin);
 
-            if (abs(currentPotValue - pots[i].lastValue) > 1) {
-                pots[i].lastValue = currentPotValue;
+            // Soustraction de la valeur la plus ancienne et ajout de la nouvelle
+            pots[i].runningSum -= pots[i].history[pots[i].historyIndex];
+            pots[i].history[pots[i].historyIndex] = rawValue;
+            pots[i].runningSum += rawValue;
+
+            // Incrémentation de l'index du tableau circulaire
+            pots[i].historyIndex = (pots[i].historyIndex + 1) % FILTER_SIZE;
+
+            // Calcul de la moyenne
+            int filteredValue = pots[i].runningSum / FILTER_SIZE;
+
+            // Envoi uniquement si la valeur filtrée change (avec le seuil de tolérance de +/- 1)
+            if (abs(filteredValue - pots[i].lastValue) > 1) {
+                pots[i].lastValue = filteredValue;
                 Serial.print(pots[i].prefix);
-                Serial.print(currentPotValue);
+                Serial.print(filteredValue);
                 Serial.write(0x0A);
             }
         }
