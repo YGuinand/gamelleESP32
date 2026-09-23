@@ -13,8 +13,6 @@
 #define PIN_LED_JAUNE 4
 #define PIN_LED_VERT  2
 
-#define PIN_POTENTIOMETRE 25
-
 // Instance de l'écran LCD Grove RGB
 rgb_lcd lcd;
 
@@ -34,15 +32,32 @@ Button buttons[] = {
 const uint8_t numButtons = sizeof(buttons) / sizeof(Button);
 const unsigned long debounceDelay = 50;
 
+// Structure pour la gestion des potentiomètres
+struct Potentiometer {
+    uint8_t pin;
+    const char* prefix;
+    int lastValue;
+};
+
+Potentiometer pots[] = {
+    {25, "PA", -10},
+    {32, "PB", -10},
+    {33, "PC", -10},
+    {35, "PD", -10},
+    {34, "PE", -10},
+    {36, "PF", -10},
+    {39, "PG", -10}
+};
+const uint8_t numPots = sizeof(pots) / sizeof(Potentiometer);
+
+// Variables globales pour le rythme d'échantillonnage analogique (20Hz max -> 50ms)
+unsigned long lastPotTime = 0;
+const unsigned long potInterval = 50; 
+
 // État actuel du rétroéclairage
 uint8_t currentR = 255;
 uint8_t currentG = 255;
 uint8_t currentB = 255;
-
-// Variables pour le potentiomètre (20Hz max -> intervalle de 50ms)
-int lastPotValue = -10; // Initialisé bas pour forcer la première lecture
-unsigned long lastPotTime = 0;
-const unsigned long potInterval = 50; 
 
 void updateBacklight() {
     if (digitalRead(PIN_BTN_JAUNE) == HIGH) {
@@ -92,7 +107,10 @@ void setup() {
     digitalWrite(PIN_LED_JAUNE, LOW);
     digitalWrite(PIN_LED_VERT, LOW);
 
-    pinMode(PIN_POTENTIOMETRE, ANALOG);
+    // Initialisation de toutes les broches des potentiomètres
+    for (uint8_t i = 0; i < numPots; i++) {
+        pinMode(pots[i].pin, ANALOG);
+    }
 }
 
 void loop() {
@@ -120,17 +138,20 @@ void loop() {
         }
     }
 
-    // Lecture du potentiomètre à fréquence maximale de 20 Hz (50 ms)
+    // Lecture séquentielle de tous les potentiomètres à la fréquence globale de 20 Hz (50 ms)
     if (millis() - lastPotTime >= potInterval) {
         lastPotTime = millis();
-        int currentPotValue = analogRead(PIN_POTENTIOMETRE);
 
-        // Envoi uniquement si la variation stricte est supérieure à +/- 1
-        if (abs(currentPotValue - lastPotValue) > 1) {
-            lastPotValue = currentPotValue;
-            Serial.print("PA");
-            Serial.print(currentPotValue);
-            Serial.write(0x0A);
+        for (uint8_t i = 0; i < numPots; i++) {
+            int currentPotValue = analogRead(pots[i].pin);
+
+            // Vérification du seuil de tolérance de +/- 1 par rapport à la dernière valeur envoyée
+            if (abs(currentPotValue - pots[i].lastValue) > 1) {
+                pots[i].lastValue = currentPotValue;
+                Serial.print(pots[i].prefix);
+                Serial.print(currentPotValue);
+                Serial.write(0x0A);
+            }
         }
     }
 
