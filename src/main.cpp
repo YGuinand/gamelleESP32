@@ -3,6 +3,14 @@
 #include <rgb_lcd.h>
 #include <ESP32Encoder.h>
 
+// ============================================================================
+// VERSION DU FIRMWARE
+// À incrémenter à chaque modification du firmware.
+// Format "Vx.y" — l'interface web compare cette valeur pour décider
+// si un reflashage est nécessaire.
+// ============================================================================
+const char FIRMWARE_VERSION[] = "V0.2";
+
 // Configuration des broches
 #define PIN_SDA 21
 #define PIN_SCL 22
@@ -26,8 +34,23 @@
 // Taille du filtre moyenne glissante (puissance de 2 pour optimisation)
 #define FILTER_SIZE 8
 
+// Adresses I2C utilisées par le LCD
+#define LCD_ADDR_HD44780  0x3E   // contrôleur LCD (présent si écran branché)
+#define LCD_ADDR_PCA9633  0x62   // contrôleur RGB (présent seulement si RGB)
+
+// Codes de détection LCD
+#define LCD_NONE        0
+#define LCD_MONOCHROME  1
+#define LCD_RGB         2
+
+// Timeout I2C (ms) — évite les blocages si un périphérique ne répond pas
+#define I2C_TIMEOUT_MS  50
+
 // Instance de l'écran LCD Grove RGB
 rgb_lcd lcd;
+
+// Type d'écran détecté (0 = aucun, 1 = monochrome, 2 = RGB)
+uint8_t lcdType = LCD_NONE;
 
 // Instances matérielles des codeurs (Périphérique PCNT)
 ESP32Encoder encoderA;
@@ -77,7 +100,7 @@ const uint8_t numPots = sizeof(pots) / sizeof(Potentiometer);
 
 // Variables globales pour les rythmes d'échantillonnage (20Hz max -> 50ms)
 unsigned long lastAnalogAndEncoderTime = 0;
-const unsigned long loopInterval = 50; 
+const unsigned long loopInterval = 50;
 
 // État actuel du rétroéclairage
 uint8_t currentR = 255;
@@ -87,35 +110,86 @@ uint8_t currentB = 255;
 // Variables pour la réception série et le Watchdog moteur
 String serialBuffer = "";
 unsigned long lastMotorCmdTime = 0;
-const unsigned long motorTimeout = 1000; 
+const unsigned long motorTimeout = 1000;
 bool motorsActive = false;
+
+// ----------------------------------------------------------------------------
+// Signal visuel de boot : 3 clignotements rapides de la LED jaune.
+// Permet de confirmer que le firmware démarre correctement.
+// ----------------------------------------------------------------------------
+void bootBlink() {
+    pinMode(PIN_LED_JAUNE, OUTPUT);
+    for (int i = 0; i < 3; i++) {
+        digitalWrite(PIN_LED_JAUNE, HIGH);
+        delay(100);
+        digitalWrite(PIN_LED_JAUNE, LOW);
+        delay(100);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Sondage d'une adresse I2C sans écriture de données.
+// La nouvelle pile ESP32 core 3.x traduit ceci en "probe", pas en "transmit",
+// ce qui évite l'erreur ESP_ERR_INVALID_STATE.
+// ----------------------------------------------------------------------------
+bool i2cProbe(uint8_t addr) {
+    Wire.beginTransmission(addr);
+    return (Wire.endTransmission() == 0);
+}
+
+// ----------------------------------------------------------------------------
+// Détection du LCD par sondage I2C
+// ----------------------------------------------------------------------------
+uint8_t detectLcd() {
+    if (!i2cProbe(LCD_ADDR_HD44780)) return LCD_NONE;
+    if (i2cProbe(LCD_ADDR_PCA9633))  return LCD_RGB;
+    return LCD_MONOCHROME;
+}
 
 // Fonction de génération du numéro de série à partir de l'eFuse MAC
 void initSerialNumber() {
     uint64_t mac = ESP.getEfuseMac();
-    snprintf(serialNumberStr, sizeof(serialNumberStr), "%04X%08X", 
+    snprintf(serialNumberStr, sizeof(serialNumberStr), "%04X%08X",
              (uint16_t)(mac >> 32), (uint32_t)mac);
 }
 
+// ----------------------------------------------------------------------------
+// Envoi groupé des identifiants : SN, Version, LCD
+// ----------------------------------------------------------------------------
+void sendIdentity() {
+    Serial.print("SN");
+    Serial.print(serialNumberStr);
+    Serial.write(0x0A);
+
+    Serial.print(FIRMWARE_VERSION);
+    Serial.write(0x0A);
+
+    Serial.print("L");
+    Serial.print(lcdType);
+    Serial.write(0x0A);
+}
+
 void updateBacklight() {
+    if (lcdType != LCD_RGB) return;   // pas de rétroéclairage RGB disponible
+
     if (digitalRead(PIN_BTN_JAUNE) == HIGH) {
         if (currentR != 255 || currentG != 255 || currentB != 0) {
             lcd.setRGB(255, 255, 0);
             currentR = 255; currentG = 255; currentB = 0;
         }
-    } 
+    }
     else if (digitalRead(PIN_BTN_VERT) == HIGH) {
         if (currentR != 0 || currentG != 255 || currentB != 0) {
             lcd.setRGB(0, 255, 0);
             currentR = 0; currentG = 255; currentB = 0;
         }
-    } 
+    }
     else if (digitalRead(PIN_BTN_BLEU) == HIGH) {
         if (currentR != 0 || currentG != 0 || currentB != 255) {
             lcd.setRGB(0, 0, 255);
             currentR = 0; currentG = 0; currentB = 255;
         }
-    } 
+    }
     else {
         if (currentR != 255 || currentG != 255 || currentB != 255) {
             lcd.setRGB(255, 255, 255);
@@ -125,12 +199,30 @@ void updateBacklight() {
 }
 
 void parseSerialCommand(String cmd) {
-    cmd.trim(); 
-    if (cmd.length() < 2) return;
+    cmd.trim();
+    if (cmd.length() < 1) return;
 
+    // ----- Interrogation du numéro de série -----
     if (cmd == "SN") {
         Serial.print("SN");
         Serial.print(serialNumberStr);
+        Serial.write(0x0A);
+        return;
+    }
+
+    // ----- Interrogation de la version firmware -----
+    if (cmd == "V") {
+        Serial.print(FIRMWARE_VERSION);
+        Serial.write(0x0A);
+        return;
+    }
+
+    // ----- Interrogation du type d'écran -----
+    if (cmd == "L") {
+        // Re-sonde à chaud : utile si l'écran a été branché après le boot
+        lcdType = detectLcd();
+        Serial.print("L");
+        Serial.print(lcdType);
         Serial.write(0x0A);
         return;
     }
@@ -142,7 +234,7 @@ void parseSerialCommand(String cmd) {
             lastMotorCmdTime = millis();
             motorsActive = true;
         }
-    } 
+    }
     else if (cmd.startsWith("MB")) {
         int duty = cmd.substring(2).toInt();
         if (duty >= 0 && duty <= 1023) {
@@ -162,36 +254,63 @@ void parseSerialCommand(String cmd) {
 }
 
 void setup() {
+    // LED jaune prête pour le boot blink
+    pinMode(PIN_LED_JAUNE, OUTPUT);
+    digitalWrite(PIN_LED_JAUNE, LOW);
+
     Serial.begin(115200);
-    serialBuffer.reserve(32);
+    serialBuffer.reserve(64);
+
+    // Signal visuel : 3 clignotements
+    bootBlink();
 
     initSerialNumber();
 
-    Serial.print("SN");
-    Serial.print(serialNumberStr);
-    Serial.write(0x0A);
-
+    // ------------------------------------------------------------------
+    // Bus I2C : on configure AVANT toute sonde.
+    // ------------------------------------------------------------------
     Wire.begin(PIN_SDA, PIN_SCL);
+    Wire.setTimeOut(I2C_TIMEOUT_MS);
 
-    lcd.begin(16, 2);
-    lcd.setRGB(255, 255, 255);
-    
-    lcd.setCursor(0, 0);
-    lcd.print("IUT de Cachan");
-    lcd.setCursor(0, 1);
-    lcd.print(serialNumberStr);
+    // Détection LCD (sondes sans écriture — fiable sur core 3.x)
+    lcdType = detectLcd();
 
+    // Émission immédiate des identifiants, AVANT l'init du LCD.
+    // Comme ça, même si le LCD bloque, le navigateur a les infos.
+    sendIdentity();
+
+    // ------------------------------------------------------------------
+    // Init LCD : à faire APRÈS les sondes.
+    // ATTENTION : rgb_lcd::begin() rappelle Wire.begin() sans paramètres.
+    // Sur ESP32 core 3.x, cela réinitialise le timeout et le clock du bus.
+    // → On les redéfinit juste après.
+    // ------------------------------------------------------------------
+    if (lcdType != LCD_NONE) {
+        lcd.begin(16, 2);
+
+        // Restauration de la config du bus après le Wire.begin() interne
+        Wire.setTimeOut(I2C_TIMEOUT_MS);
+        Wire.setClock(100000);
+
+        if (lcdType == LCD_RGB) {
+            lcd.setRGB(255, 255, 255);
+        }
+        lcd.setCursor(0, 0);
+        lcd.print("IUT de Cachan");
+        lcd.setCursor(0, 1);
+        lcd.print(serialNumberStr);
+    }
+
+    // Boutons
     for (uint8_t i = 0; i < numButtons; i++) {
         pinMode(buttons[i].pin, INPUT);
     }
 
-    pinMode(PIN_LED_JAUNE, OUTPUT);
     pinMode(PIN_LED_VERT, OUTPUT);
-    
     digitalWrite(PIN_LED_JAUNE, LOW);
     digitalWrite(PIN_LED_VERT, LOW);
 
-    // Initialisation des potentiomètres et pré-remplissage de l'historique de filtrage
+    // Potentiomètres : init + pré-remplissage de l'historique de filtrage
     for (uint8_t i = 0; i < numPots; i++) {
         pinMode(pots[i].pin, ANALOG);
         int initialValue = analogRead(pots[i].pin);
@@ -202,28 +321,39 @@ void setup() {
         pots[i].lastValue = initialValue;
     }
 
+    // PWM moteurs
     ledcAttach(PIN_PWM_MOTEUR_A, PWM_FREQ, PWM_RESOLUTION);
     ledcAttach(PIN_PWM_MOTEUR_B, PWM_FREQ, PWM_RESOLUTION);
     ledcWrite(PIN_PWM_MOTEUR_A, 0);
     ledcWrite(PIN_PWM_MOTEUR_B, 0);
     lastMotorCmdTime = millis();
 
+    // Codeurs
     ESP32Encoder::useInternalWeakPullResistors = puType::up;
-    
     encoderA.attachFullQuad(17, 18);
     encoderB.attachFullQuad(19, 13);
     encoderA.setCount(0);
     encoderB.setCount(0);
+
+    // Signal de fin de setup
+    digitalWrite(PIN_LED_JAUNE, HIGH);
+    delay(200);
+    digitalWrite(PIN_LED_JAUNE, LOW);
 }
 
 void loop() {
     while (Serial.available() > 0) {
         char c = Serial.read();
-        if (c == 0x0A) { 
+        if (c == 0x0A) {
             parseSerialCommand(serialBuffer);
             serialBuffer = "";
-        } else if (c != 0x0D) { 
-            serialBuffer += c;
+        } else if (c != 0x0D) {
+            // Limite de sécurité : évite qu'un buffer sans \n ne grossisse sans fin
+            if (serialBuffer.length() < 64) {
+                serialBuffer += c;
+            } else {
+                serialBuffer = "";
+            }
         }
     }
 
@@ -270,7 +400,7 @@ void loop() {
             // Calcul de la moyenne
             int filteredValue = pots[i].runningSum / FILTER_SIZE;
 
-            // Envoi uniquement si la valeur filtrée change (avec le seuil de tolérance de +/- 1)
+            // Envoi uniquement si la valeur filtrée change (seuil de tolérance ± 1)
             if (abs(filteredValue - pots[i].lastValue) > 1) {
                 pots[i].lastValue = filteredValue;
                 Serial.print(pots[i].prefix);

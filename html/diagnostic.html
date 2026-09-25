@@ -193,6 +193,19 @@
             margin-top: 15px;
             text-align: left;
         }
+
+        /* --- Ligne d'info port --- */
+        .port-info {
+            margin-top: 8px;
+            font-size: 14px;
+        }
+        #lblPort {
+            font-family: monospace;
+            font-weight: bold;
+            color: #0056b3;
+        }
+        #lblFwStatus.outdated { color: #dc3545; }
+        #lblFwStatus.uptodate { color: #28a745; }
     </style>
 </head>
 <body>
@@ -203,12 +216,27 @@
 
     <div class="status-box">
         <button id="btnConnect" class="btn">Établir la connexion avec l'ESP32</button>
+        <button id="btnConnectAny" class="btn btn-secondary" disabled>Chercher tous les ports</button>
         <button id="btnDisconnect" class="btn btn-danger" disabled>Déconnecter</button>
         <button id="btnFlash" class="btn btn-warning" disabled>Reflasher firmware.bin</button>
         <span id="connStatus" style="margin-left: 15px; font-weight: bold; color: red;">Déconnecté</span>
-        <div style="margin-top: 10px;">
+
+        <div class="port-info">
+            <strong>Port sélectionné :</strong>
+            <span id="lblPort">Aucun</span>
+        </div>
+        <div class="port-info" style="margin-top: 6px;">
             <strong>Numéro de Série Détecté (eFuse) :</strong>
             <span id="lblSN" style="font-weight: bold; color: #dc3545;">Lecture en cours... (Veuillez connecter la carte)</span>
+        </div>
+        <div class="port-info" style="margin-top: 6px;">
+            <strong>Version firmware :</strong>
+            <span id="lblFwVersion" style="font-weight: bold; color: #dc3545;">—</span>
+            <span id="lblFwStatus" style="margin-left: 10px; font-weight: bold;"></span>
+        </div>
+        <div class="port-info" style="margin-top: 6px;">
+            <strong>Écran LCD détecté :</strong>
+            <span id="lblLcd" style="font-weight: bold; color: #dc3545;">—</span>
         </div>
     </div>
 

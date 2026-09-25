@@ -1,18 +1,95 @@
 /* ==========================================================================
    Banc de diagnostic ESP32 - IUT de Cachan
    Logique de test + génération du rapport + reflashage automatique.
+   Handshake SN + V + L avec polling et reset DTR/RTS de secours.
    ========================================================================== */
 
 /* ----------------------------------------------------------------------
-   Configuration du reflashage
+   Configuration
    ---------------------------------------------------------------------- */
-const FIRMWARE_URL = "firmware.factory.bin";      // fichier dans le même dossier
-const FIRMWARE_FLASH_ADDR = 0x0;      // app only (partition par défaut).
-                                          // Mettre 0x0 pour un merged.bin complet.
+const FIRMWARE_URL = "firmware.factory.bin";
+const FIRMWARE_FLASH_ADDR = 0x0;
 const ESPTOOL_CDN = "https://cdn.jsdelivr.net/npm/esptool-js@0.5.4/bundle.js";
-const SN_TIMEOUT_MS = 4000;               // délai max d'attente du SN après ouverture
-const POST_FLASH_DELAY_MS = 2500;         // temps de boot de l'ESP32 après reset
-const AUTO_FLASH_RETRY_LIMIT = 1;         // évite une boucle infinie si le .bin est mauvais
+const SN_TIMEOUT_MS = 4000;
+const HANDSHAKE_TIMEOUT_MS = 2000;
+const HANDSHAKE_POLL_MS = 400;
+const POST_FLASH_DELAY_MS = 2500;
+const AUTO_FLASH_RETRY_LIMIT = 1;
+
+/* ----------------------------------------------------------------------
+   Version attendue du firmware
+   À SYNCHRONISER avec FIRMWARE_VERSION dans main.cpp
+   ---------------------------------------------------------------------- */
+const EXPECTED_FW_VERSION = "V0.2";
+
+/* ----------------------------------------------------------------------
+   Table des puces USB-série les plus fréquentes sur cartes ESP32
+   ---------------------------------------------------------------------- */
+const USB_CHIPS = [
+    { vid: 0x10C4, pid: 0xEA60, name: "Silicon Labs CP2102" },
+    { vid: 0x10C4, pid: 0xEA70, name: "Silicon Labs CP2105" },
+    { vid: 0x10C4, pid: 0xEA71, name: "Silicon Labs CP2108" },
+    { vid: 0x1A86, pid: 0x7523, name: "WCH CH340" },
+    { vid: 0x1A86, pid: 0x55D4, name: "WCH CH9102" },
+    { vid: 0x1A86, pid: 0x5523, name: "WCH CH341" },
+    { vid: 0x0403, pid: 0x6001, name: "FTDI FT232R" },
+    { vid: 0x0403, pid: 0x6015, name: "FTDI FT231X" },
+    { vid: 0x303A, pid: 0x1001, name: "Espressif USB-Serial/JTAG" }
+];
+
+const ESP32_USB_FILTERS = [
+    { usbVendorId: 0x10C4 },
+    { usbVendorId: 0x1A86 },
+    { usbVendorId: 0x0403 },
+    { usbVendorId: 0x303A }
+];
+
+function describePort(port) {
+    if (!port) return { label: "Aucun", isKnown: false };
+
+    let info;
+    try { info = port.getInfo(); }
+    catch (e) { return { label: "Port (info indisponible)", isKnown: false }; }
+
+    const vid = info.usbVendorId;
+    const pid = info.usbProductId;
+
+    if (vid === undefined || pid === undefined) {
+        return { label: "Port série natif (sans info USB)", isKnown: false };
+    }
+
+    const hex = (v) => "0x" + v.toString(16).toUpperCase().padStart(4, "0");
+    const match = USB_CHIPS.find(c => c.vid === vid && c.pid === pid);
+    const chipName = match ? match.name : "Puce USB inconnue";
+
+    return {
+        label: `${chipName} [VID=${hex(vid)} PID=${hex(pid)}]`,
+        vid: hex(vid),
+        pid: hex(pid),
+        chip: chipName,
+        isKnown: !!match
+    };
+}
+
+/* ----------------------------------------------------------------------
+   Comparaison de versions "Vx.y" ou "Vx.y.z"
+   ---------------------------------------------------------------------- */
+function compareVersions(a, b) {
+    const parse = v => (v || "").replace(/^V/i, "")
+                               .split(/[.\-]/)
+                               .map(s => parseInt(s, 10))
+                               .filter(n => !isNaN(n));
+    const pa = parse(a);
+    const pb = parse(b);
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+        const na = pa[i] ?? 0;
+        const nb = pb[i] ?? 0;
+        if (na < nb) return -1;
+        if (na > nb) return 1;
+    }
+    return 0;
+}
 
 /* ----------------------------------------------------------------------
    État global
@@ -27,7 +104,16 @@ let stepTimer = null;
 let escalationTimer = null;
 
 let snTimeoutHandle = null;
+let handshakeTimeoutHandle = null;
+let handshakePollHandle = null;
 let autoFlashAttempts = 0;
+
+let firmwareVersion = null;
+let firmwareUpToDate = null;
+let lcdType = null;
+let stepsAdjustedForLcd = false;
+
+let handshakeDone = false;
 
 const reportResults = [];
 
@@ -62,7 +148,7 @@ const encoderState = {
 };
 
 /* ----------------------------------------------------------------------
-   Définition des étapes
+   Définition des étapes (par défaut, avant adaptation au type d'écran)
    ---------------------------------------------------------------------- */
 const steps = [
     {
@@ -116,10 +202,15 @@ const steps = [
    Références DOM
    ---------------------------------------------------------------------- */
 const btnConnect    = document.getElementById('btnConnect');
+const btnConnectAny = document.getElementById('btnConnectAny');
 const btnDisconnect = document.getElementById('btnDisconnect');
 const btnFlash      = document.getElementById('btnFlash');
 const connStatus    = document.getElementById('connStatus');
 const lblSN         = document.getElementById('lblSN');
+const lblPort       = document.getElementById('lblPort');
+const lblFwVersion  = document.getElementById('lblFwVersion');
+const lblFwStatus   = document.getElementById('lblFwStatus');
+const lblLcd        = document.getElementById('lblLcd');
 const testZone      = document.getElementById('testZone');
 const stepTitleEl   = document.getElementById('stepTitle');
 const stepInstructionEl = document.getElementById('stepInstruction');
@@ -137,7 +228,8 @@ const flashOverlay     = document.getElementById('flashOverlay');
 const flashMessage     = document.getElementById('flashMessage');
 const flashProgressBar = document.getElementById('flashProgressBar');
 
-btnConnect.addEventListener('click', () => connectSerial());
+btnConnect.addEventListener('click', () => connectSerial(false));
+btnConnectAny.addEventListener('click', () => connectSerial(true));
 btnDisconnect.addEventListener('click', disconnectSerial);
 btnFlash.addEventListener('click', manualFlashRequest);
 document.getElementById('btnTestAnother').addEventListener('click', testAnotherBoard);
@@ -148,47 +240,100 @@ document.getElementById('btnDownloadReport').addEventListener('click', downloadR
    Connexion / Déconnexion / Flash
    ====================================================================== */
 
-async function connectSerial(existingPort = null) {
+async function connectSerial(allowAny, existingPort = null) {
     try {
         if (existingPort) {
             port = existingPort;
+            console.log("Réutilisation d'un port existant :", describePort(port));
         } else {
-            port = await navigator.serial.requestPort();
+            const known = await navigator.serial.getPorts();
+            console.log("Ports déjà autorisés :", known.map(describePort));
+
+            if (known.length === 1 && !allowAny) {
+                port = known[0];
+                console.log("Réutilisation automatique du port mémorisé :", describePort(port));
+            } else {
+                const opts = allowAny ? {} : { filters: ESP32_USB_FILTERS };
+                port = await navigator.serial.requestPort(opts);
+            }
         }
+
+        const desc = describePort(port);
+        lblPort.textContent = desc.label;
+        lblPort.style.color = desc.isKnown ? "#28a745" : "#0056b3";
+        console.log("Port sélectionné :", desc);
+
         await port.open({ baudRate: 115200 });
 
         connStatus.textContent = "Connecté (115200 Baud)";
         connStatus.style.color = "green";
         btnConnect.disabled = true;
+        btnConnectAny.disabled = true;
         btnDisconnect.disabled = false;
         btnFlash.disabled = false;
         testZone.style.display = "block";
         reportZone.style.display = "none";
 
-        // Arme le watchdog d'absence de SN
+        // Arme le watchdog d'absence totale de réponse
         snTimeoutHandle = setTimeout(handleNoResponse, SN_TIMEOUT_MS);
 
-        readSerialLoop();
-        setTimeout(() => { sendCommand("SN"); }, 200);
+        // Prépare le handshake (SN + V + L)
+        handshakeDone = false;
+        if (handshakeTimeoutHandle) { clearTimeout(handshakeTimeoutHandle); handshakeTimeoutHandle = null; }
+        if (handshakePollHandle)    { clearInterval(handshakePollHandle);   handshakePollHandle = null; }
 
-        // Petit délai pour laisser le SN arriver avant de démarrer les étapes.
-        // startStep sera déclenché dès la réception du SN (voir processIncomingLine),
-        // ou bien par sécurité après 500ms si un SN est déjà arrivé avant.
+        // Réémission périodique tant que le handshake n'est pas terminé.
         setTimeout(() => {
-            if (serialNumber !== "INCONNU") startStep(0);
-        }, 500);
+            const pollOnce = () => {
+                if (handshakeDone) return;
+                sendCommand("SN");
+                sendCommand("V");
+                sendCommand("L");
+            };
+            pollOnce();
+            handshakePollHandle = setInterval(pollOnce, HANDSHAKE_POLL_MS);
+        }, 200);
+
+        // Timeout global : tentative de reset matériel DTR/RTS pour rejouer setup()
+        handshakeTimeoutHandle = setTimeout(async () => {
+            if (handshakeDone) return;
+            console.warn("Handshake incomplet — tentative de reset matériel DTR/RTS…");
+
+            try {
+                await port.setSignals({ dataTerminalReady: false, requestToSend: true });
+                await new Promise(r => setTimeout(r, 100));
+                await port.setSignals({ dataTerminalReady: true, requestToSend: false });
+                await new Promise(r => setTimeout(r, 100));
+                await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+                await new Promise(r => setTimeout(r, 300));
+            } catch (e) {
+                console.warn("Reset DTR/RTS échoué :", e);
+            }
+
+            setTimeout(() => {
+                if (!handshakeDone) {
+                    console.warn("Démarrage du diagnostic en mode dégradé.");
+                    maybeStartDiagnostic(true);
+                }
+            }, 1500);
+        }, SN_TIMEOUT_MS + HANDSHAKE_TIMEOUT_MS);
+
+        readSerialLoop();
 
     } catch (error) {
+        console.error("Erreur de connexion série :", error);
         alert("Impossible d'accéder au port série : " + error);
+        lblPort.textContent = "Aucun";
+        lblPort.style.color = "#0056b3";
     }
 }
 
-// Ferme proprement le port. Si keepPortRef=true, la référence `port` est conservée
-// pour permettre une réouverture immédiate (cas du reflashage).
 async function closeSerialPort(keepPortRef = false) {
     keepReading = false;
     clearTimers();
-    if (snTimeoutHandle) { clearTimeout(snTimeoutHandle); snTimeoutHandle = null; }
+    if (snTimeoutHandle)        { clearTimeout(snTimeoutHandle);        snTimeoutHandle = null; }
+    if (handshakeTimeoutHandle) { clearTimeout(handshakeTimeoutHandle); handshakeTimeoutHandle = null; }
+    if (handshakePollHandle)    { clearInterval(handshakePollHandle);   handshakePollHandle = null; }
 
     if (reader) {
         try { await reader.cancel(); } catch (e) { /* ignoré */ }
@@ -216,21 +361,30 @@ async function testAnotherBoard() {
     resetAllState();
     resetUIAfterDisconnect();
     autoFlashAttempts = 0;
-    await connectSerial();
+    await connectSerial(false);
 }
 
 function resetUIAfterDisconnect() {
     connStatus.textContent = "Déconnecté";
     connStatus.style.color = "red";
     btnConnect.disabled = false;
+    btnConnectAny.disabled = false;
     btnDisconnect.disabled = true;
     btnFlash.disabled = true;
     testZone.style.display = "none";
     reportZone.style.display = "none";
     reportArea.style.display = "none";
     reportArea.textContent = "";
+    lblPort.textContent = "Aucun";
+    lblPort.style.color = "#0056b3";
     lblSN.textContent = "Lecture en cours... (Veuillez connecter la carte)";
     lblSN.style.color = "#dc3545";
+    lblFwVersion.textContent = "—";
+    lblFwVersion.style.color = "#dc3545";
+    lblFwStatus.textContent = "";
+    lblFwStatus.className = "";
+    lblLcd.textContent = "—";
+    lblLcd.style.color = "#dc3545";
 }
 
 function resetAllState() {
@@ -238,6 +392,16 @@ function resetAllState() {
     currentStepIndex = 0;
     reportResults.length = 0;
     inputBuffer = "";
+
+    firmwareVersion = null;
+    firmwareUpToDate = null;
+    lcdType = null;
+    stepsAdjustedForLcd = false;
+    handshakeDone = false;
+
+    if (handshakeTimeoutHandle) { clearTimeout(handshakeTimeoutHandle); handshakeTimeoutHandle = null; }
+    if (handshakePollHandle)    { clearInterval(handshakePollHandle);   handshakePollHandle = null; }
+    if (snTimeoutHandle)        { clearTimeout(snTimeoutHandle);        snTimeoutHandle = null; }
 
     Object.values(BUTTONS).forEach(b => { b.pressed = false; b.seenDown = false; });
     POT_PREFIXES.forEach(p => {
@@ -250,6 +414,19 @@ function resetAllState() {
         st.lastValue = null; st.baseline = null; st.moved = false;
         st.min = null; st.max = null;
     });
+
+    const step1 = steps.find(s => s.kind === "buttons-visual");
+    if (step1) {
+        step1.title = "Test Boutons + LEDs + Rétroéclairage LCD";
+        step1.instruction = "Validez d'abord l'état de repos de l'écran, puis testez chaque bouton en vérifiant simultanément l'effet visuel (LED + couleur de l'écran LCD).";
+        step1.items = [
+            { key: "repos", btnId: null, label: "Sans appui : l'écran est blanc et affiche 'IUT de Cachan' + le SN" },
+            { key: "jaune", btnId: 1,    label: "Appui bouton JAUNE : la LED jaune s'allume ET l'écran devient jaune" },
+            { key: "vert",  btnId: 2,    label: "Appui bouton VERT : la LED verte s'allume ET l'écran devient vert" },
+            { key: "bleu",  btnId: 3,    label: "Appui bouton BLEU : l'écran devient bleu (pas de LED dédiée)" }
+        ];
+    }
+
     steps.forEach(s => {
         s._subIndex = 0; s._subAnswers = {};
         s._escalated = false; s._escalationChoice = null; s._watchdogAnswer = null;
@@ -293,14 +470,83 @@ async function sendCommand(cmdStr) {
 }
 
 /* ----------------------------------------------------------------------
-   Absence de réponse → proposition de reflashage
+   Handshake : attend SN + V + L avant de démarrer le diagnostic
    ---------------------------------------------------------------------- */
+async function maybeStartDiagnostic(force = false) {
+    if (handshakeDone) return;
 
+    const hasSn = serialNumber !== "INCONNU";
+    const hasV  = firmwareVersion !== null;
+    const hasL  = lcdType !== null;
+
+    if (!force && !(hasSn && hasV && hasL)) return;
+
+    handshakeDone = true;
+    if (handshakeTimeoutHandle) { clearTimeout(handshakeTimeoutHandle); handshakeTimeoutHandle = null; }
+    if (handshakePollHandle)    { clearInterval(handshakePollHandle);   handshakePollHandle = null; }
+
+    if (hasSn) {
+        await checkFirmwareFreshness();
+    }
+
+    if (!port || !keepReading) return;
+
+    if (hasL) adjustStepsForLcd(lcdType);
+    startStep(0);
+}
+
+/* ----------------------------------------------------------------------
+   Contrôle de fraîcheur du firmware (après handshake)
+   ---------------------------------------------------------------------- */
+async function checkFirmwareFreshness() {
+    if (serialNumber === "INCONNU") return;
+
+    if (firmwareVersion !== null && firmwareUpToDate === false) {
+        const userWantsFlash = confirm(
+            `Le firmware de la carte est en version ${firmwareVersion}, ` +
+            `mais la version attendue est ${EXPECTED_FW_VERSION}.\n\n` +
+            `Voulez-vous mettre à jour le firmware maintenant ?\n\n` +
+            `OUI = reflasher, NON = continuer avec la version actuelle ` +
+            `(certains tests peuvent échouer).`
+        );
+        if (userWantsFlash) {
+            await closeSerialPort(true);
+            testZone.style.display = "none";
+            await flashFirmwareAndRetry();
+            return;
+        }
+        console.warn("Diagnostic lancé avec firmware obsolète : " + firmwareVersion);
+        reportResults.push({
+            title: "ATTENTION — Version firmware",
+            status: "AVERTISSEMENT",
+            lines: [
+                `  - Version détectée : ${firmwareVersion}`,
+                `  - Version attendue : ${EXPECTED_FW_VERSION}`,
+                `  - L'opérateur a choisi de continuer malgré tout.`
+            ]
+        });
+    } else if (firmwareVersion === null) {
+        console.warn("Version firmware non reçue.");
+        reportResults.push({
+            title: "ATTENTION — Version firmware",
+            status: "AVERTISSEMENT",
+            lines: [
+                "  - Aucune réponse à la commande V.",
+                "  - Le firmware ne supporte probablement pas l'interrogation de version.",
+                `  - Version attendue : ${EXPECTED_FW_VERSION}`
+            ]
+        });
+    }
+}
+
+/* ----------------------------------------------------------------------
+   Absence de réponse totale → proposition de reflashage
+   ---------------------------------------------------------------------- */
 async function handleNoResponse() {
     snTimeoutHandle = null;
-    if (serialNumber !== "INCONNU") return;      // SN déjà reçu, rien à faire
+    if (serialNumber !== "INCONNU") return;
 
-    await closeSerialPort(true);                 // on garde la référence de port
+    await closeSerialPort(true);
     autoActions.style.display = "none";
     testZone.style.display = "none";
 
@@ -341,7 +587,6 @@ function manualFlashRequest() {
 /* ----------------------------------------------------------------------
    Flashage via esptool-js
    ---------------------------------------------------------------------- */
-
 function showFlashOverlay(msg, pct = null) {
     flashOverlay.classList.add("visible");
     flashMessage.textContent = msg;
@@ -372,7 +617,6 @@ async function flashFirmwareAndRetry() {
     try {
         showFlashOverlay("Chargement du module esptool-js…", 0);
 
-        // Chargement dynamique du module ESM
         const esptool = await import(ESPTOOL_CDN);
         const { ESPLoader, Transport } = esptool;
 
@@ -400,7 +644,6 @@ async function flashFirmwareAndRetry() {
             }
         });
 
-        // Connexion au bootloader ROM (auto-reset via DTR/RTS si la carte le permet)
         const chip = await loader.main();
         showFlashOverlay(`Chip détecté : ${chip}. Effacement + écriture en cours…`, 15);
 
@@ -422,18 +665,12 @@ async function flashFirmwareAndRetry() {
         showFlashOverlay("Redémarrage de la carte…", 98);
         try { await transport.disconnect(); } catch (e) { /* toléré */ }
 
-        // Attendre que le port se libère complètement
         await new Promise(r => setTimeout(r, 500));
 
-        // Réouvrir le port pour forcer un reset par toggling DTR/RTS
-        try {
-            await portToUse.close();
-        } catch (e) { /* ignoré */ }
+        try { await portToUse.close(); } catch (e) { /* ignoré */ }
         await new Promise(r => setTimeout(r, 300));
-
         await portToUse.open({ baudRate: 115200 });
 
-        // Séquence de reset "double pulse" qui fonctionne sur la plupart des cartes
         const sleep = (ms) => new Promise(res => setTimeout(res, ms));
         await portToUse.setSignals({ dataTerminalReady: false, requestToSend: true });
         await sleep(100);
@@ -451,13 +688,12 @@ async function flashFirmwareAndRetry() {
         await new Promise(r => setTimeout(r, POST_FLASH_DELAY_MS));
         hideFlashOverlay();
 
-        // Réinitialise et retente la connexion sur le MÊME port
         resetAllState();
         lblSN.textContent = "Lecture en cours... (Veuillez connecter la carte)";
         lblSN.style.color = "#dc3545";
         testZone.style.display = "block";
         reportZone.style.display = "none";
-        await connectSerial(portToUse);
+        await connectSerial(false, portToUse);
 
     } catch (err) {
         hideFlashOverlay();
@@ -470,26 +706,68 @@ async function flashFirmwareAndRetry() {
 /* ======================================================================
    Traitement des trames entrantes
    ====================================================================== */
-
-let step0Started = false;
-
 function processIncomingLine(line) {
     if (!line) return;
 
+    // --- Numéro de série ---
     if (line.startsWith("SN")) {
-        serialNumber = line.substring(2);
-        lblSN.textContent = "SN" + serialNumber;
-        lblSN.style.color = "#28a745";
-        if (snTimeoutHandle) { clearTimeout(snTimeoutHandle); snTimeoutHandle = null; }
-        // Démarre les étapes dès qu'on a le SN (la 1ère fois)
-        if (!step0Started) {
-            step0Started = true;
-            // Laisse le temps au LCD de s'initialiser côté firmware
-            setTimeout(() => startStep(0), 300);
+        if (serialNumber === "INCONNU") {
+            serialNumber = line.substring(2);
+            lblSN.textContent = "SN" + serialNumber;
+            lblSN.style.color = "#28a745";
+            if (snTimeoutHandle) { clearTimeout(snTimeoutHandle); snTimeoutHandle = null; }
+            maybeStartDiagnostic();
         }
         return;
     }
 
+    // --- Version firmware ---
+    if (line[0] === "V" && /^V[0-9]/.test(line)) {
+        if (firmwareVersion === null) {
+            firmwareVersion = line;
+            lblFwVersion.textContent = firmwareVersion;
+
+            const cmp = compareVersions(firmwareVersion, EXPECTED_FW_VERSION);
+            if (cmp < 0) {
+                firmwareUpToDate = false;
+                lblFwVersion.style.color = "#dc3545";
+                lblFwStatus.textContent = `(obsolète — attendu ${EXPECTED_FW_VERSION})`;
+                lblFwStatus.className = "outdated";
+                console.warn("Firmware obsolète : " + firmwareVersion + " < " + EXPECTED_FW_VERSION);
+            } else if (cmp === 0) {
+                firmwareUpToDate = true;
+                lblFwVersion.style.color = "#28a745";
+                lblFwStatus.textContent = "(à jour)";
+                lblFwStatus.className = "uptodate";
+            } else {
+                firmwareUpToDate = true;
+                lblFwVersion.style.color = "#28a745";
+                lblFwStatus.textContent = `(plus récent que ${EXPECTED_FW_VERSION})`;
+                lblFwStatus.className = "uptodate";
+            }
+            maybeStartDiagnostic();
+        }
+        return;
+    }
+
+    // --- Type d'écran ---
+    if (line[0] === "L" && line.length === 2 && /[0-2]/.test(line[1])) {
+        if (lcdType === null) {
+            lcdType = parseInt(line[1], 10);
+            const labels = {
+                0: "Aucun écran (L0)",
+                1: "Écran LCD monochrome (L1)",
+                2: "Écran LCD avec rétroéclairage RGB (L2)"
+            };
+            lblLcd.textContent = labels[lcdType] || ("Type inconnu (" + lcdType + ")");
+            lblLcd.style.color = (lcdType === 0) ? "#dc3545" : "#28a745";
+            adjustStepsForLcd(lcdType);
+            maybeStartDiagnostic();
+        }
+        return;
+    }
+
+    // --- Boutons "D<id>" / "U<id>" ---
     if ((line[0] === "D" || line[0] === "U") && BUTTONS[line.substring(1)]) {
         const id = line.substring(1);
         if (line[0] === "D") { BUTTONS[id].pressed = true; BUTTONS[id].seenDown = true; }
@@ -498,6 +776,7 @@ function processIncomingLine(line) {
         return;
     }
 
+    // --- Potentiomètres ---
     for (const prefix of POT_PREFIXES) {
         if (line.startsWith(prefix)) {
             const value = parseInt(line.substring(prefix.length), 10);
@@ -506,6 +785,7 @@ function processIncomingLine(line) {
         }
     }
 
+    // --- Codeurs ---
     for (const key of ["CA", "CB"]) {
         if (line.startsWith(key)) {
             const value = parseInt(line.substring(key.length), 10);
@@ -540,9 +820,44 @@ function updateEncoderState(key, value) {
 }
 
 /* ======================================================================
+   Adaptation des étapes au type d'écran détecté
+   ====================================================================== */
+function adjustStepsForLcd(type) {
+    if (stepsAdjustedForLcd) return;
+    stepsAdjustedForLcd = true;
+
+    const step = steps.find(s => s.kind === "buttons-visual");
+    if (!step) return;
+
+    if (type === 0) {
+        step.items = [
+            { key: "jaune", btnId: 1, label: "Appui bouton JAUNE : la LED jaune s'allume" },
+            { key: "vert",  btnId: 2, label: "Appui bouton VERT : la LED verte s'allume" }
+        ];
+        step.instruction = "Aucun écran détecté — test des LEDs uniquement. Appuyez successivement sur JAUNE puis VERT.";
+        step.title = "Test Boutons + LEDs (sans écran)";
+    } else if (type === 1) {
+        step.items = [
+            { key: "repos", btnId: null, label: "L'écran s'allume et affiche 'IUT de Cachan' + le SN (sans couleur particulière)" },
+            { key: "jaune", btnId: 1,    label: "Appui bouton JAUNE : la LED jaune s'allume" },
+            { key: "vert",  btnId: 2,    label: "Appui bouton VERT : la LED verte s'allume" }
+        ];
+        step.instruction = "Écran monochrome détecté — validez l'affichage puis les LEDs. Le rétroéclairage RGB n'est pas disponible.";
+        step.title = "Test Boutons + LEDs + Écran monochrome";
+    } else {
+        step.title = "Test Boutons + LEDs + Rétroéclairage LCD";
+    }
+
+    if (currentStep() === step) {
+        step._subIndex = 0;
+        step._subAnswers = {};
+        renderButtonsVisualSubQuestion(step);
+    }
+}
+
+/* ======================================================================
    Helpers de validation des potentiomètres
    ====================================================================== */
-
 function potIsValidated(st) {
     return st.min !== null && st.max !== null
         && st.min <= POT_ACCEPT_MIN
@@ -561,7 +876,6 @@ function potValidationBadge(st) {
 /* ======================================================================
    Moteur de déroulement des étapes
    ====================================================================== */
-
 function currentStep() { return steps[currentStepIndex]; }
 
 function startStep(index) {
@@ -869,7 +1183,6 @@ function goToNextStep() { startStep(currentStepIndex + 1); }
 /* ======================================================================
    Rapport final + déconnexion automatique
    ====================================================================== */
-
 function endDiagnostic() {
     clearTimers();
     testZone.style.display = "none";
@@ -883,6 +1196,21 @@ function endDiagnostic() {
     text += `Date du Diagnostic : ${dateStr}\n`;
     text += `Identifiant Carte  : SN${serialNumber}\n`;
     text += `Entite             : IUT de Cachan\n`;
+
+    text += `Version firmware   : ${firmwareVersion ?? "non communiquée"}`;
+    if (firmwareUpToDate === false) {
+        text += ` -- ATTENTION : obsolète (attendu ${EXPECTED_FW_VERSION})`;
+    } else if (firmwareUpToDate === true) {
+        text += ` (à jour)`;
+    }
+    text += `\n`;
+
+    const lcdLabels = {
+        0: "Aucun écran détecté",
+        1: "Écran LCD monochrome (sans rétroéclairage RGB)",
+        2: "Écran LCD RGB"
+    };
+    text += `Écran LCD détecté  : ${lcdLabels[lcdType] ?? "non communiqué"}\n`;
     text += `--------------------------------------------------\n\n`;
 
     let totalPass = 0;
@@ -918,12 +1246,12 @@ function endDiagnostic() {
     reportArea.textContent = text;
     reportArea.style.display = "block";
 
-    // Déconnexion automatique
     (async () => {
         await closeSerialPort();
         connStatus.textContent = "Déconnecté (test terminé)";
         connStatus.style.color = "red";
         btnConnect.disabled = false;
+        btnConnectAny.disabled = false;
         btnDisconnect.disabled = true;
         btnFlash.disabled = true;
     })();
