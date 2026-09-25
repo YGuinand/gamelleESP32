@@ -6,8 +6,8 @@
 /* ----------------------------------------------------------------------
    Configuration du reflashage
    ---------------------------------------------------------------------- */
-const FIRMWARE_URL = "firmware.bin";      // fichier dans le même dossier
-const FIRMWARE_FLASH_ADDR = 0x10000;      // app only (partition par défaut).
+const FIRMWARE_URL = "firmware.factory.bin";      // fichier dans le même dossier
+const FIRMWARE_FLASH_ADDR = 0x0;      // app only (partition par défaut).
                                           // Mettre 0x0 pour un merged.bin complet.
 const ESPTOOL_CDN = "https://cdn.jsdelivr.net/npm/esptool-js@0.5.4/bundle.js";
 const SN_TIMEOUT_MS = 4000;               // délai max d'attente du SN après ouverture
@@ -420,8 +420,32 @@ async function flashFirmwareAndRetry() {
         });
 
         showFlashOverlay("Redémarrage de la carte…", 98);
-        await loader.after();                // reset hard
         try { await transport.disconnect(); } catch (e) { /* toléré */ }
+
+        // Attendre que le port se libère complètement
+        await new Promise(r => setTimeout(r, 500));
+
+        // Réouvrir le port pour forcer un reset par toggling DTR/RTS
+        try {
+            await portToUse.close();
+        } catch (e) { /* ignoré */ }
+        await new Promise(r => setTimeout(r, 300));
+
+        await portToUse.open({ baudRate: 115200 });
+
+        // Séquence de reset "double pulse" qui fonctionne sur la plupart des cartes
+        const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+        await portToUse.setSignals({ dataTerminalReady: false, requestToSend: true });
+        await sleep(100);
+        await portToUse.setSignals({ dataTerminalReady: true, requestToSend: false });
+        await sleep(100);
+        await portToUse.setSignals({ dataTerminalReady: false, requestToSend: false });
+        await sleep(100);
+        await portToUse.setSignals({ dataTerminalReady: true, requestToSend: true });
+        await sleep(200);
+        await portToUse.setSignals({ dataTerminalReady: false, requestToSend: false });
+
+        try { await portToUse.close(); } catch (e) { /* ignoré */ }
 
         showFlashOverlay("Firmware reflashé ! Reconnexion dans " + (POST_FLASH_DELAY_MS / 1000) + " s…", 100);
         await new Promise(r => setTimeout(r, POST_FLASH_DELAY_MS));
