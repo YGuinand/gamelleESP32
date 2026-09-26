@@ -38,6 +38,8 @@
         .btn-danger:hover { background-color: #c82333; }
         .btn-warning { background-color: #ffc107; color: #212529; }
         .btn-warning:hover { background-color: #e0a800; }
+        .btn-secondary { background-color: #6c757d; }
+        .btn-secondary:hover { background-color: #5a6268; }
         .btn:disabled { background-color: #cccccc; cursor: not-allowed; }
 
         .status-box {
@@ -90,6 +92,34 @@
             border-top: 1px solid #dee2e6;
         }
         #manualQuestion { font-size: 16px; margin-bottom: 10px; }
+
+        /* --- Conteneur d'image d'étape --- */
+        #stepImageBox {
+            display: none;
+            margin: 15px 0;
+            text-align: center;
+            background-color: #fafbfc;
+            background-image: url('images/board.png');
+            background-size: 100% 100%;
+            background-position: center;
+            background-repeat: no-repeat;
+            border: 1px dashed #ced4da;
+            border-radius: 6px;
+            overflow: hidden;
+            max-width: 100%;
+        }
+        #stepImageBox.no-lcd {
+            background-image: url('images/board-nolcd.png');
+        }
+        #stepImageBox.visible { display: inline-block; }
+        #stepImage {
+            display: block;
+            max-width: 100%;
+            max-height: 300px;
+            height: auto;
+            width: auto;
+        }
+        #stepImageCaption { display: none; }
 
         /* --- Barres visuelles pour les potentiomètres --- */
         .pot-bar-container {
@@ -244,6 +274,12 @@
         <div class="step-card active" id="stepCard">
             <h2 id="stepTitle">Étape</h2>
             <div class="instruction" id="stepInstruction">...</div>
+
+            <!-- Zone d'image d'illustration de l'étape en cours -->
+            <div id="stepImageBox">
+                <img id="stepImage" alt="">
+                <div id="stepImageCaption"></div>
+            </div>
 
             <div class="action-zone">
                 <div id="manualActions" style="display:none;">

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 928 624" width="928" height="624">
+  <defs><radialGradient id="gY"><stop offset="0%" stop-color="#ffee00" stop-opacity="1.0"/><stop offset="45%" stop-color="#ffd000" stop-opacity="0.75"/><stop offset="100%" stop-color="#ffd000" stop-opacity="0"/></radialGradient><radialGradient id="gG"><stop offset="0%" stop-color="#00ff44" stop-opacity="1.0"/><stop offset="45%" stop-color="#00dd33" stop-opacity="0.75"/><stop offset="100%" stop-color="#00dd33" stop-opacity="0"/></radialGradient><radialGradient id="gB"><stop offset="0%" stop-color="#66aaff" stop-opacity="1.0"/><stop offset="45%" stop-color="#3388ff" stop-opacity="0.75"/><stop offset="100%" stop-color="#3388ff" stop-opacity="0"/></radialGradient></defs>
+  <rect width="928" height="624" fill="none"/>
+<rect x="135" y="118" width="757" height="250" fill="#e6dd44" opacity="0.65"/>
+  <text x="513" y="248" font-family="monospace" font-size="46" font-weight="bold" fill="#1a1a1a" text-anchor="middle" letter-spacing="2">IUT de Cachan</text>
+  <text x="513" y="318" font-family="monospace" font-size="46" font-weight="bold" fill="#1a1a1a" text-anchor="middle" letter-spacing="2">XXXXXXXXXXXX</text>
+  <circle cx="635" cy="548" r="100" fill="url(#gB)"/>
+  <circle cx="635" cy="548" r="88" fill="none" stroke="#ffffff" stroke-width="4" opacity="0.9"/>
+  <circle cx="635" cy="548" r="88" fill="none" stroke="#66aaff" stroke-width="8"/>
+  <circle cx="635" cy="548" r="76" fill="none" stroke="#66aaff" stroke-width="3" opacity="0.85"/>
+</svg>

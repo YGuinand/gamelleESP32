@@ -1,7 +1,8 @@
 /* ==========================================================================
    Banc de diagnostic ESP32 - IUT de Cachan
    Logique de test + génération du rapport + reflashage automatique.
-   Handshake SN + V + L optimisé (polling conditionnel, délais réduits).
+   Handshake SN + V + L optimisé. Illustrations d'étapes via images.
+   Bascule entre deux photos de fond selon le type d'écran (avec/sans LCD).
    ========================================================================== */
 
 /* ----------------------------------------------------------------------
@@ -11,23 +12,26 @@ const FIRMWARE_URL = "firmware.factory.bin";
 const FIRMWARE_FLASH_ADDR = 0x0;
 const ESPTOOL_CDN = "https://cdn.jsdelivr.net/npm/esptool-js@0.5.4/bundle.js";
 
-// Handshake : délais resserrés (cf. discussion — la carte répond en 10-50 ms)
-const SN_TIMEOUT_MS            = 1500;   // était 4000
-const HANDSHAKE_TIMEOUT_MS     = 800;    // était 2000
-const HANDSHAKE_POLL_MS        = 150;    // était 400
-const HANDSHAKE_FIRST_POLL_MS  = 50;     // NOUVEAU — délai du premier envoi
+const SN_TIMEOUT_MS            = 1500;
+const HANDSHAKE_TIMEOUT_MS     = 800;
+const HANDSHAKE_POLL_MS        = 150;
+const HANDSHAKE_FIRST_POLL_MS  = 50;
 
 const POST_FLASH_DELAY_MS = 2500;
 const AUTO_FLASH_RETRY_LIMIT = 1;
 
 /* ----------------------------------------------------------------------
+   Dossier des images d'illustration
+   ---------------------------------------------------------------------- */
+const IMAGES_BASE = "images/";
+
+/* ----------------------------------------------------------------------
    Version attendue du firmware
-   À SYNCHRONISER avec FIRMWARE_VERSION dans main.cpp
    ---------------------------------------------------------------------- */
 const EXPECTED_FW_VERSION = "V0.3";
 
 /* ----------------------------------------------------------------------
-   Table des puces USB-série les plus fréquentes sur cartes ESP32
+   Table des puces USB-série
    ---------------------------------------------------------------------- */
 const USB_CHIPS = [
     { vid: 0x10C4, pid: 0xEA60, name: "Silicon Labs CP2102" },
@@ -76,7 +80,7 @@ function describePort(port) {
 }
 
 /* ----------------------------------------------------------------------
-   Comparaison de versions "Vx.y" ou "Vx.y.z"
+   Comparaison de versions
    ---------------------------------------------------------------------- */
 function compareVersions(a, b) {
     const parse = v => (v || "").replace(/^V/i, "")
@@ -152,7 +156,7 @@ const encoderState = {
 };
 
 /* ----------------------------------------------------------------------
-   Définition des étapes (par défaut, avant adaptation au type d'écran)
+   Définition des étapes
    ---------------------------------------------------------------------- */
 const steps = [
     {
@@ -160,29 +164,32 @@ const steps = [
         title: "Test Boutons + LEDs + Rétroéclairage LCD",
         instruction: "Validez d'abord l'état de repos de l'écran, puis testez chaque bouton en vérifiant simultanément l'effet visuel (LED + couleur de l'écran LCD).",
         items: [
-            { key: "repos", btnId: null, label: "Sans appui : l'écran est blanc et affiche 'IUT de Cachan' + le SN" },
-            { key: "jaune", btnId: 1,    label: "Appui bouton JAUNE : la LED jaune s'allume ET l'écran devient jaune" },
-            { key: "vert",  btnId: 2,    label: "Appui bouton VERT : la LED verte s'allume ET l'écran devient vert" },
-            { key: "bleu",  btnId: 3,    label: "Appui bouton BLEU : l'écran devient bleu (pas de LED dédiée)" }
+            { key: "repos", btnId: null, label: "Sans appui : l'écran est blanc et affiche 'IUT de Cachan' + le SN", image: "step1-L2-repos.svg" },
+            { key: "jaune", btnId: 1,    label: "Appui bouton JAUNE : la LED jaune s'allume ET l'écran devient jaune", image: "step1-L2-jaune.svg" },
+            { key: "vert",  btnId: 2,    label: "Appui bouton VERT : la LED verte s'allume ET l'écran devient vert", image: "step1-L2-vert.svg" },
+            { key: "bleu",  btnId: 3,    label: "Appui bouton BLEU : l'écran devient bleu (pas de LED dédiée)", image: "step1-L2-bleu.svg" }
         ]
     },
     {
         kind: "buttons",
         title: "Test des Entrées de Sécurité (JACK & FDC)",
         instruction: "Appuyez sur le bouton JACK puis sur le bouton de fin de course FDC.",
-        items: [4, 5]
+        items: [4, 5],
+        image: "step2.svg"
     },
     {
         kind: "pot-single",
         title: "Test de Course Complète du Potentiomètre Principal (PA)",
         instruction: "Faites tourner le potentiomètre PA (IO25) sur toute sa course. Cible : min ≤ 50 et max ≥ 4050 sur 0..4095.",
-        channel: "PA"
+        channel: "PA",
+        image: "step3.svg"
     },
     {
         kind: "pot-multi",
         title: "Test de Course Complète du Bus Analogique (PB à PG)",
         instruction: "Faites tourner CHACUN des potentiomètres PB, PC, PD, PE, PF et PG sur toute leur course. Cible : min ≤ 50 et max ≥ 4050 sur 0..4095.",
-        channels: ["PB", "PC", "PD", "PE", "PF", "PG"]
+        channels: ["PB", "PC", "PD", "PE", "PF", "PG"],
+        image: "step4.svg"
     },
     {
         kind: "motor-encoder",
@@ -190,7 +197,8 @@ const steps = [
         instruction: "Le banc force un signal PWM à 50% sur IO26 (Moteur A). Le codeur A (IO17/18) doit compter automatiquement pendant la rotation.",
         motorCmd: "MA512", motorLabel: "Moteur A",
         encoderKey: "CA", encoderLabel: "Codeur A",
-        timeoutMs: 4000, watchdog: false
+        timeoutMs: 4000, watchdog: false,
+        image: "step5.svg"
     },
     {
         kind: "motor-encoder",
@@ -198,7 +206,8 @@ const steps = [
         instruction: "Le banc force un signal PWM à 50% sur IO27 (Moteur B). Le codeur B (IO19/13) doit compter. Le watchdog (arrêt après 1s sans commande) sera vérifié ensuite.",
         motorCmd: "MB512", motorLabel: "Moteur B",
         encoderKey: "CB", encoderLabel: "Codeur B",
-        timeoutMs: 4000, watchdog: true
+        timeoutMs: 4000, watchdog: true,
+        image: "step6.svg"
     }
 ];
 
@@ -228,6 +237,10 @@ const btnNo         = document.getElementById('btnNo');
 const btnForceFail  = document.getElementById('btnForceFail');
 const manualQuestion= document.getElementById('manualQuestion');
 
+const stepImageBox     = document.getElementById('stepImageBox');
+const stepImageEl      = document.getElementById('stepImage');
+const stepImageCaption = document.getElementById('stepImageCaption');
+
 const flashOverlay     = document.getElementById('flashOverlay');
 const flashMessage     = document.getElementById('flashMessage');
 const flashProgressBar = document.getElementById('flashProgressBar');
@@ -239,6 +252,30 @@ btnFlash.addEventListener('click', manualFlashRequest);
 document.getElementById('btnTestAnother').addEventListener('click', testAnotherBoard);
 btnForceFail.addEventListener('click', onForceFailClicked);
 document.getElementById('btnDownloadReport').addEventListener('click', downloadReportFile);
+
+/* ----------------------------------------------------------------------
+   Gestion de l'image d'illustration
+   ---------------------------------------------------------------------- */
+function updateStepImage(imageFile, caption) {
+    if (!imageFile) {
+        stepImageBox.classList.remove("visible");
+        stepImageEl.removeAttribute("src");
+        if (stepImageCaption) stepImageCaption.textContent = "";
+        return;
+    }
+
+    const fullPath = IMAGES_BASE + imageFile;
+    stepImageEl.onerror = () => {
+        stepImageBox.classList.remove("visible");
+        console.info("Image introuvable (ignorée) : " + fullPath);
+    };
+    stepImageEl.onload = () => {
+        stepImageBox.classList.add("visible");
+    };
+    stepImageEl.alt = caption || "";
+    if (stepImageCaption) stepImageCaption.textContent = caption || "";
+    stepImageEl.src = fullPath;
+}
 
 /* ======================================================================
    Connexion / Déconnexion / Flash
@@ -276,20 +313,14 @@ async function connectSerial(allowAny, existingPort = null) {
         btnDisconnect.disabled = false;
         btnFlash.disabled = false;
 
-        // Le testZone reste masqué tant que startStep() n'a pas affiché son contenu.
         reportZone.style.display = "none";
 
-        // Watchdog d'absence totale de réponse
         snTimeoutHandle = setTimeout(handleNoResponse, SN_TIMEOUT_MS);
 
-        // Prépare le handshake (SN + V + L)
         handshakeDone = false;
         if (handshakeTimeoutHandle) { clearTimeout(handshakeTimeoutHandle); handshakeTimeoutHandle = null; }
         if (handshakePollHandle)    { clearInterval(handshakePollHandle);   handshakePollHandle = null; }
 
-        // Polling conditionnel : on n'envoie que ce qu'on n'a pas encore reçu.
-        // Dès que le firmware a émis SN, V et L spontanément (ce qu'il fait au boot),
-        // le navigateur peut recevoir les trois lignes sans avoir rien envoyé.
         setTimeout(() => {
             const pollOnce = () => {
                 if (handshakeDone) return;
@@ -301,7 +332,6 @@ async function connectSerial(allowAny, existingPort = null) {
             handshakePollHandle = setInterval(pollOnce, HANDSHAKE_POLL_MS);
         }, HANDSHAKE_FIRST_POLL_MS);
 
-        // Timeout global : tentative de reset matériel DTR/RTS
         handshakeTimeoutHandle = setTimeout(async () => {
             if (handshakeDone) return;
             console.warn("Handshake incomplet — tentative de reset matériel DTR/RTS…");
@@ -390,10 +420,14 @@ function resetUIAfterDisconnect() {
     lblLcd.textContent = "—";
     lblLcd.style.color = "#dc3545";
 
-    // Nettoie les textes résiduels pour éviter tout affichage fantôme
     stepTitleEl.textContent = "Étape";
     stepInstructionEl.textContent = "...";
     stepLiveData.textContent = "Données en attente...";
+
+    // Rétablit la photo par défaut (avec écran)
+    stepImageBox.classList.remove("no-lcd");
+
+    updateStepImage(null);
 }
 
 function resetAllState() {
@@ -429,10 +463,10 @@ function resetAllState() {
         step1.title = "Test Boutons + LEDs + Rétroéclairage LCD";
         step1.instruction = "Validez d'abord l'état de repos de l'écran, puis testez chaque bouton en vérifiant simultanément l'effet visuel (LED + couleur de l'écran LCD).";
         step1.items = [
-            { key: "repos", btnId: null, label: "Sans appui : l'écran est blanc et affiche 'IUT de Cachan' + le SN" },
-            { key: "jaune", btnId: 1,    label: "Appui bouton JAUNE : la LED jaune s'allume ET l'écran devient jaune" },
-            { key: "vert",  btnId: 2,    label: "Appui bouton VERT : la LED verte s'allume ET l'écran devient vert" },
-            { key: "bleu",  btnId: 3,    label: "Appui bouton BLEU : l'écran devient bleu (pas de LED dédiée)" }
+            { key: "repos", btnId: null, label: "Sans appui : l'écran est blanc et affiche 'IUT de Cachan' + le SN", image: "step1-L2-repos.svg" },
+            { key: "jaune", btnId: 1,    label: "Appui bouton JAUNE : la LED jaune s'allume ET l'écran devient jaune", image: "step1-L2-jaune.svg" },
+            { key: "vert",  btnId: 2,    label: "Appui bouton VERT : la LED verte s'allume ET l'écran devient vert", image: "step1-L2-vert.svg" },
+            { key: "bleu",  btnId: 3,    label: "Appui bouton BLEU : l'écran devient bleu (pas de LED dédiée)", image: "step1-L2-bleu.svg" }
         ];
     }
 
@@ -479,7 +513,7 @@ async function sendCommand(cmdStr) {
 }
 
 /* ----------------------------------------------------------------------
-   Handshake : attend SN + V + L avant de démarrer le diagnostic
+   Handshake
    ---------------------------------------------------------------------- */
 async function maybeStartDiagnostic(force = false) {
     if (handshakeDone) return;
@@ -492,8 +526,6 @@ async function maybeStartDiagnostic(force = false) {
 
     handshakeDone = true;
 
-    // On stoppe TOUT de suite le polling et les timeouts, AVANT le
-    // checkFirmwareFreshness() qui peut afficher un confirm() bloquant.
     if (handshakeTimeoutHandle) { clearTimeout(handshakeTimeoutHandle); handshakeTimeoutHandle = null; }
     if (handshakePollHandle)    { clearInterval(handshakePollHandle);   handshakePollHandle = null; }
     if (snTimeoutHandle)        { clearTimeout(snTimeoutHandle);        snTimeoutHandle = null; }
@@ -509,7 +541,7 @@ async function maybeStartDiagnostic(force = false) {
 }
 
 /* ----------------------------------------------------------------------
-   Contrôle de fraîcheur du firmware (après handshake)
+   Contrôle de fraîcheur du firmware
    ---------------------------------------------------------------------- */
 async function checkFirmwareFreshness() {
     if (serialNumber === "INCONNU") return;
@@ -553,7 +585,7 @@ async function checkFirmwareFreshness() {
 }
 
 /* ----------------------------------------------------------------------
-   Absence de réponse totale → proposition de reflashage
+   Absence de réponse
    ---------------------------------------------------------------------- */
 async function handleNoResponse() {
     snTimeoutHandle = null;
@@ -598,7 +630,7 @@ function manualFlashRequest() {
 }
 
 /* ----------------------------------------------------------------------
-   Flashage via esptool-js
+   Flashage
    ---------------------------------------------------------------------- */
 function showFlashOverlay(msg, pct = null) {
     flashOverlay.classList.add("visible");
@@ -721,7 +753,6 @@ async function flashFirmwareAndRetry() {
 function processIncomingLine(line) {
     if (!line) return;
 
-    // --- Numéro de série ---
     if (line.startsWith("SN")) {
         if (serialNumber === "INCONNU") {
             serialNumber = line.substring(2);
@@ -733,7 +764,6 @@ function processIncomingLine(line) {
         return;
     }
 
-    // --- Version firmware ---
     if (line[0] === "V" && /^V[0-9]/.test(line)) {
         if (firmwareVersion === null) {
             firmwareVersion = line;
@@ -762,7 +792,6 @@ function processIncomingLine(line) {
         return;
     }
 
-    // --- Type d'écran ---
     if (line[0] === "L" && line.length === 2 && /[0-2]/.test(line[1])) {
         if (lcdType === null) {
             lcdType = parseInt(line[1], 10);
@@ -779,7 +808,6 @@ function processIncomingLine(line) {
         return;
     }
 
-    // --- Boutons "D<id>" / "U<id>" ---
     if ((line[0] === "D" || line[0] === "U") && BUTTONS[line.substring(1)]) {
         const id = line.substring(1);
         if (line[0] === "D") { BUTTONS[id].pressed = true; BUTTONS[id].seenDown = true; }
@@ -788,7 +816,6 @@ function processIncomingLine(line) {
         return;
     }
 
-    // --- Potentiomètres ---
     for (const prefix of POT_PREFIXES) {
         if (line.startsWith(prefix)) {
             const value = parseInt(line.substring(prefix.length), 10);
@@ -797,7 +824,6 @@ function processIncomingLine(line) {
         }
     }
 
-    // --- Codeurs ---
     for (const key of ["CA", "CB"]) {
         if (line.startsWith(key)) {
             const value = parseInt(line.substring(key.length), 10);
@@ -833,34 +859,39 @@ function updateEncoderState(key, value) {
 
 /* ======================================================================
    Adaptation des étapes au type d'écran détecté
+   Bascule également la photo de fond (avec ou sans écran)
    ====================================================================== */
 function adjustStepsForLcd(type) {
     if (stepsAdjustedForLcd) return;
     stepsAdjustedForLcd = true;
 
+    // --- Bascule de la photo de fond ---
+    if (type === 0) {
+        stepImageBox.classList.add("no-lcd");     // photo sans LCD
+    } else {
+        stepImageBox.classList.remove("no-lcd");  // photo avec LCD
+    }
+
+    // --- Adaptation des items de l'étape 1 ---
     const step = steps.find(s => s.kind === "buttons-visual");
     if (!step) return;
 
     if (type === 0) {
-        // Aucun écran : le bouton bleu n'a pas d'effet visuel, mais on
-        // vérifie quand même sa détection électrique.
         step.items = [
-            { key: "jaune", btnId: 1, label: "Appui bouton JAUNE : la LED jaune s'allume" },
-            { key: "vert",  btnId: 2, label: "Appui bouton VERT : la LED verte s'allume" },
-            { key: "bleu",  btnId: 3, label: "Appui bouton BLEU : la détection est enregistrée automatiquement (aucun effet visuel sans écran)" }
+            { key: "jaune", btnId: 1, label: "Appui bouton JAUNE : la LED jaune s'allume", image: "step1-L0-jaune.svg" },
+            { key: "vert",  btnId: 2, label: "Appui bouton VERT : la LED verte s'allume", image: "step1-L0-vert.svg" },
+            { key: "bleu",  btnId: 3, label: "Appui bouton BLEU : la détection est enregistrée automatiquement (aucun effet visuel sans écran)", image: "step1-L0-bleu.svg" }
         ];
         step.instruction = "Aucun écran détecté — test des LEDs et de la détection des 3 boutons. Appuyez successivement sur JAUNE, VERT puis BLEU.";
         step.title = "Test Boutons + LEDs (sans écran)";
     } else if (type === 1) {
-        // Écran monochrome : pas de rétroéclairage RGB, mais le bouton bleu
-        // reste testé électriquement (détection uniquement).
         step.items = [
-            { key: "repos", btnId: null, label: "L'écran s'allume et affiche 'IUT de Cachan' + le SN (sans couleur particulière)" },
-            { key: "jaune", btnId: 1,    label: "Appui bouton JAUNE : la LED jaune s'allume" },
-            { key: "vert",  btnId: 2,    label: "Appui bouton VERT : la LED verte s'allume" },
-            { key: "bleu",  btnId: 3,    label: "Appui bouton BLEU : la détection est enregistrée automatiquement (le rétroéclairage RGB est absent)" }
+            { key: "repos", btnId: null, label: "L'écran s'allume (rétroéclairage jaune) et affiche 'IUT de Cachan' + le SN", image: "step1-L1-repos.svg" },
+            { key: "jaune", btnId: 1,    label: "Appui bouton JAUNE : la LED jaune s'allume", image: "step1-L1-jaune.svg" },
+            { key: "vert",  btnId: 2,    label: "Appui bouton VERT : la LED verte s'allume", image: "step1-L1-vert.svg" },
+            { key: "bleu",  btnId: 3,    label: "Appui bouton BLEU : la détection est enregistrée automatiquement (le rétroéclairage RGB est absent)", image: "step1-L1-bleu.svg" }
         ];
-        step.instruction = "Écran monochrome détecté — validez l'affichage puis les LEDs, et vérifiez la détection des 3 boutons. Le rétroéclairage RGB n'est pas disponible.";
+        step.instruction = "Écran monochrome (rétroéclairage jaune) détecté — validez l'affichage puis les LEDs, et vérifiez la détection des 3 boutons. Le rétroéclairage RGB n'est pas disponible.";
         step.title = "Test Boutons + LEDs + Écran monochrome";
     } else {
         step.title = "Test Boutons + LEDs + Rétroéclairage LCD";
@@ -902,12 +933,12 @@ function startStep(index) {
     currentStepIndex = index;
     const step = steps[index];
 
-    // Affiche le testZone uniquement au moment où le contenu est prêt.
-    // Évite d'afficher une étape fantôme lors de la reconnexion.
     testZone.style.display = "block";
 
     stepTitleEl.textContent = `Étape ${index + 1} / ${steps.length} : ${step.title}`;
     stepInstructionEl.textContent = step.instruction;
+
+    updateStepImage(step.image, step.imageCaption || null);
 
     step._subIndex = 0; step._subAnswers = {};
     step._escalated = false; step._escalationChoice = null; step._watchdogAnswer = null;
@@ -1152,6 +1183,9 @@ function renderButtonsVisualSubQuestion(step) {
     btnNo.textContent  = "NON (Défaillant)";
     btnYes.onclick = () => answerButtonsVisualSubQuestion(step, true);
     btnNo.onclick  = () => answerButtonsVisualSubQuestion(step, false);
+
+    updateStepImage(item.image, null);
+
     updateButtonsVisualLive(step);
 }
 
@@ -1203,7 +1237,7 @@ function finalizeButtonsVisualStep(step) {
 function goToNextStep() { startStep(currentStepIndex + 1); }
 
 /* ======================================================================
-   Rapport final + déconnexion automatique
+   Rapport final
    ====================================================================== */
 function endDiagnostic() {
     clearTimers();
@@ -1229,7 +1263,7 @@ function endDiagnostic() {
 
     const lcdLabels = {
         0: "Aucun écran détecté",
-        1: "Écran LCD monochrome (sans rétroéclairage RGB)",
+        1: "Écran LCD monochrome (rétroéclairage jaune, sans RGB)",
         2: "Écran LCD RGB"
     };
     text += `Écran LCD détecté  : ${lcdLabels[lcdType] ?? "non communiqué"}\n`;

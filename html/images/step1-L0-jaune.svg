@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 928 624" width="928" height="624">
+  <defs><radialGradient id="gY"><stop offset="0%" stop-color="#ffee00" stop-opacity="1.0"/><stop offset="45%" stop-color="#ffd000" stop-opacity="0.75"/><stop offset="100%" stop-color="#ffd000" stop-opacity="0"/></radialGradient><radialGradient id="gG"><stop offset="0%" stop-color="#00ff44" stop-opacity="1.0"/><stop offset="45%" stop-color="#00dd33" stop-opacity="0.75"/><stop offset="100%" stop-color="#00dd33" stop-opacity="0"/></radialGradient><radialGradient id="gB"><stop offset="0%" stop-color="#66aaff" stop-opacity="1.0"/><stop offset="45%" stop-color="#3388ff" stop-opacity="0.75"/><stop offset="100%" stop-color="#3388ff" stop-opacity="0"/></radialGradient></defs>
+  <rect width="928" height="624" fill="none"/>
+<text x="513" y="253" font-family="sans-serif" font-size="30" font-weight="bold" fill="#ffc107" text-anchor="middle" stroke="#000000" stroke-width="0.8">Emplacement écran vide (normal)</text>
+  <circle cx="828" cy="48" r="52" fill="url(#gY)"/>
+  <circle cx="828" cy="48" r="30" fill="none" stroke="#ffee00" stroke-width="5" opacity="0.95"/>
+  <circle cx="310" cy="548" r="100" fill="url(#gY)"/>
+  <circle cx="310" cy="548" r="88" fill="none" stroke="#ffffff" stroke-width="4" opacity="0.9"/>
+  <circle cx="310" cy="548" r="88" fill="none" stroke="#ffee00" stroke-width="8"/>
+  <circle cx="310" cy="548" r="76" fill="none" stroke="#ffee00" stroke-width="3" opacity="0.85"/>
+</svg>

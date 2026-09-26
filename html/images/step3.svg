@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 928 624" width="928" height="624">
+  <defs>
+    <radialGradient id="gP">
+      <stop offset="0%" stop-color="#28a745" stop-opacity="0.85"/>
+      <stop offset="45%" stop-color="#28a745" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#28a745" stop-opacity="0"/>
+    </radialGradient>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#28a745"/>
+    </marker>
+  </defs>
+  <rect width="928" height="624" fill="none"/>
+  <circle cx="808" cy="548" r="105" fill="url(#gP)"/>
+  <circle cx="808" cy="548" r="90" fill="none" stroke="#ffffff" stroke-width="4" opacity="0.9"/>
+  <circle cx="808" cy="548" r="90" fill="none" stroke="#28a745" stroke-width="8"/>
+  <circle cx="808" cy="548" r="76" fill="none" stroke="#28a745" stroke-width="3" opacity="0.85"/>
+  <path d="M 736 493 A 95 95 0 0 0 736 603"
+        fill="none" stroke="#28a745" stroke-width="6" marker-end="url(#arr)"/>
+  <path d="M 880 493 A 95 95 0 0 1 880 603"
+        fill="none" stroke="#28a745" stroke-width="6" marker-end="url(#arr)"/>
+  <text x="808" y="423" font-family="sans-serif" font-size="24"
+        font-weight="bold" fill="#1a6e2e" text-anchor="middle">Tournez !</text>
+</svg>
