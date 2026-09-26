@@ -20,7 +20,7 @@ const AUTO_FLASH_RETRY_LIMIT = 1;
    Version attendue du firmware
    À SYNCHRONISER avec FIRMWARE_VERSION dans main.cpp
    ---------------------------------------------------------------------- */
-const EXPECTED_FW_VERSION = "V0.2";
+const EXPECTED_FW_VERSION = "V0.3";
 
 /* ----------------------------------------------------------------------
    Table des puces USB-série les plus fréquentes sur cartes ESP32
@@ -301,11 +301,8 @@ async function connectSerial(allowAny, existingPort = null) {
 
             try {
                 await port.setSignals({ dataTerminalReady: false, requestToSend: true });
-                await new Promise(r => setTimeout(r, 100));
-                await port.setSignals({ dataTerminalReady: true, requestToSend: false });
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, 200));
                 await port.setSignals({ dataTerminalReady: false, requestToSend: false });
-                await new Promise(r => setTimeout(r, 300));
             } catch (e) {
                 console.warn("Reset DTR/RTS échoué :", e);
             }

@@ -9,7 +9,7 @@
 // Format "Vx.y" — l'interface web compare cette valeur pour décider
 // si un reflashage est nécessaire.
 // ============================================================================
-const char FIRMWARE_VERSION[] = "V0.2";
+const char FIRMWARE_VERSION[] = "V0.3";
 
 // Configuration des broches
 #define PIN_SDA 21
@@ -21,8 +21,8 @@ const char FIRMWARE_VERSION[] = "V0.2";
 #define PIN_BTN_JACK  23
 #define PIN_BTN_FDC   16
 
-#define PIN_LED_JAUNE 4
-#define PIN_LED_VERT  2
+#define PIN_LED_JAUNE 2
+#define PIN_LED_VERT  4
 
 #define PIN_PWM_MOTEUR_A 26
 #define PIN_PWM_MOTEUR_B 27
@@ -36,7 +36,8 @@ const char FIRMWARE_VERSION[] = "V0.2";
 
 // Adresses I2C utilisées par le LCD
 #define LCD_ADDR_HD44780  0x3E   // contrôleur LCD (présent si écran branché)
-#define LCD_ADDR_PCA9633  0x62   // contrôleur RGB (présent seulement si RGB)
+#define LCD_ADDR_PCA9633  0x62   // contrôleur RGB V1 à V4 (présent seulement si RGB)
+#define LCD_ADDR_SGM31323 0x30   // contrôleur RGB V5 (présent seulement si RGB)
 
 // Codes de détection LCD
 #define LCD_NONE        0
@@ -143,6 +144,7 @@ bool i2cProbe(uint8_t addr) {
 uint8_t detectLcd() {
     if (!i2cProbe(LCD_ADDR_HD44780)) return LCD_NONE;
     if (i2cProbe(LCD_ADDR_PCA9633))  return LCD_RGB;
+    if (i2cProbe(LCD_ADDR_SGM31323))  return LCD_RGB;
     return LCD_MONOCHROME;
 }
 
