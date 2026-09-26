@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>Banc de Diagnostic - IUT de Cachan</title>
     <style>
+        * { box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: #f4f7f6;
@@ -11,24 +12,61 @@
             margin: 0;
             padding: 20px;
         }
-        .container {
-            max-width: 900px;
+
+        /* --- Mise en page deux colonnes --- */
+        .layout {
+            max-width: 1300px;
             margin: 0 auto;
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+        }
+        .sidebar {
+            width: 360px;
+            flex-shrink: 0;
             background: white;
-            padding: 30px;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 20px;
+        }
+        .main {
+            flex: 1;
+            min-width: 0;
+            background: white;
+            padding: 25px;
             border-radius: 8px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         }
-        h1, h2 { color: #0056b3; margin-top: 0; }
+
+        @media (max-width: 900px) {
+            .layout { flex-direction: column; }
+            .sidebar { width: 100%; position: static; }
+        }
+
+        h1 {
+            color: #0056b3;
+            margin: 0 0 6px 0;
+            font-size: 20px;
+        }
+        .sidebar .subtitle {
+            color: #6c757d;
+            font-size: 12px;
+            margin: 0 0 18px 0;
+            font-style: italic;
+        }
+
+        /* --- Boutons --- */
         .btn {
             background-color: #007bff;
             color: white;
             border: none;
-            padding: 10px 20px;
-            font-size: 16px;
+            padding: 8px 14px;
+            font-size: 14px;
             border-radius: 5px;
             cursor: pointer;
-            margin: 5px;
+            margin: 4px 4px 4px 0;
             transition: background 0.2s;
         }
         .btn:hover { background-color: #0056b3; }
@@ -42,13 +80,64 @@
         .btn-secondary:hover { background-color: #5a6268; }
         .btn:disabled { background-color: #cccccc; cursor: not-allowed; }
 
+        /* --- Bloc de statut dans la sidebar --- */
         .status-box {
-            background-color: #e9ecef;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-            font-size: 16px;
+            background-color: #f8f9fa;
+            padding: 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            border: 1px solid #e9ecef;
         }
+        .status-box .actions {
+            margin-bottom: 12px;
+        }
+        .status-box .actions .btn {
+            width: 100%;
+            margin: 3px 0;
+            text-align: center;
+        }
+        .info-line {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #dee2e6;
+            font-size: 13px;
+            word-break: break-word;
+        }
+        .info-line:first-of-type {
+            border-top: none;
+            padding-top: 0;
+        }
+        .info-line strong {
+            color: #495057;
+            display: block;
+            margin-bottom: 3px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        #connStatus {
+            display: block;
+            font-weight: bold;
+            text-align: center;
+            padding: 6px;
+            border-radius: 4px;
+            background: #fff5f5;
+            color: red;
+            margin-bottom: 10px;
+        }
+        #lblSN, #lblFwVersion, #lblLcd, #lblPort {
+            font-weight: bold;
+            color: #dc3545;
+        }
+        #lblPort {
+            font-family: monospace;
+            color: #0056b3;
+        }
+        #lblFwStatus.outdated { color: #dc3545; }
+        #lblFwStatus.uptodate { color: #28a745; }
+
+        /* --- Carte d'étape --- */
         .step-card {
             border: 2px solid #dee2e6;
             padding: 20px;
@@ -60,8 +149,13 @@
             border-color: #007bff;
             background-color: #f8f9fa;
         }
+        .step-card h2 {
+            color: #0056b3;
+            margin-top: 0;
+            font-size: 20px;
+        }
         .instruction {
-            font-size: 18px;
+            font-size: 17px;
             font-weight: bold;
             color: #495057;
             margin-bottom: 15px;
@@ -76,16 +170,7 @@
             white-space: pre-wrap;
             font-size: 13px;
         }
-        #reportArea {
-            white-space: pre-wrap;
-            background: #f8f9fa;
-            border: 1px solid #ced4da;
-            padding: 15px;
-            border-radius: 5px;
-            font-family: monospace;
-            margin-top: 20px;
-            display: none;
-        }
+
         .action-zone {
             margin-top: 15px;
             padding-top: 15px;
@@ -121,7 +206,7 @@
         }
         #stepImageCaption { display: none; }
 
-        /* --- Barres visuelles pour les potentiomètres --- */
+        /* --- Barres visuelles des potentiomètres --- */
         .pot-bar-container {
             margin: 10px 0;
             padding: 8px 10px;
@@ -148,8 +233,7 @@
         .pot-bar-container.pot-bar-small .pot-bar-track { height: 14px; }
         .pot-bar-range {
             position: absolute;
-            top: 0;
-            bottom: 0;
+            top: 0; bottom: 0;
             background: linear-gradient(to right,
                 rgba(40,167,69,0.20),
                 rgba(40,167,69,0.55),
@@ -157,8 +241,7 @@
         }
         .pot-bar-cursor {
             position: absolute;
-            top: 0;
-            bottom: 0;
+            top: 0; bottom: 0;
             width: 3px;
             background: #ffc107;
             box-shadow: 0 0 6px rgba(255,193,7,0.9);
@@ -172,7 +255,20 @@
             margin-top: 3px;
         }
 
-        /* --- Overlay de flashage --- */
+        /* --- Zone de rapport --- */
+        #reportArea {
+            white-space: pre-wrap;
+            background: #f8f9fa;
+            border: 1px solid #ced4da;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+            margin-top: 20px;
+            display: none;
+        }
+        #reportZone h2 { color: #0056b3; margin-top: 0; }
+
+        /* --- Overlay de flashage (inchangé) --- */
         #flashOverlay {
             display: none;
             position: fixed;
@@ -223,86 +319,88 @@
             margin-top: 15px;
             text-align: left;
         }
-
-        /* --- Ligne d'info port --- */
-        .port-info {
-            margin-top: 8px;
-            font-size: 14px;
-        }
-        #lblPort {
-            font-family: monospace;
-            font-weight: bold;
-            color: #0056b3;
-        }
-        #lblFwStatus.outdated { color: #dc3545; }
-        #lblFwStatus.uptodate { color: #28a745; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <h1>Banc de Diagnostic Gamelle ESP32</h1>
-    <p>Ce script communique en direct avec l'ESP32 via l'API Web Serial.</p>
+<div class="layout">
 
-    <div class="status-box">
-        <button id="btnConnect" class="btn">Établir la connexion avec l'ESP32</button>
-        <button id="btnConnectAny" class="btn btn-secondary" disabled>Chercher tous les ports</button>
-        <button id="btnDisconnect" class="btn btn-danger" disabled>Déconnecter</button>
-        <button id="btnFlash" class="btn btn-warning" disabled>Reflasher firmware.bin</button>
-        <span id="connStatus" style="margin-left: 15px; font-weight: bold; color: red;">Déconnecté</span>
+    <!-- ============================================================ -->
+    <!-- VOLET GAUCHE : connexion, port, SN, version, écran           -->
+    <!-- ============================================================ -->
+    <aside class="sidebar">
+        <h1>Banc de Diagnostic</h1>
+        <p class="subtitle">IUT de Cachan — Gamelle ESP32</p>
 
-        <div class="port-info">
-            <strong>Port sélectionné :</strong>
-            <span id="lblPort">Aucun</span>
-        </div>
-        <div class="port-info" style="margin-top: 6px;">
-            <strong>Numéro de Série Détecté (eFuse) :</strong>
-            <span id="lblSN" style="font-weight: bold; color: #dc3545;">Lecture en cours... (Veuillez connecter la carte)</span>
-        </div>
-        <div class="port-info" style="margin-top: 6px;">
-            <strong>Version firmware :</strong>
-            <span id="lblFwVersion" style="font-weight: bold; color: #dc3545;">—</span>
-            <span id="lblFwStatus" style="margin-left: 10px; font-weight: bold;"></span>
-        </div>
-        <div class="port-info" style="margin-top: 6px;">
-            <strong>Écran LCD détecté :</strong>
-            <span id="lblLcd" style="font-weight: bold; color: #dc3545;">—</span>
-        </div>
-    </div>
-
-    <div id="testZone" style="display:none;">
-        <div class="step-card active" id="stepCard">
-            <h2 id="stepTitle">Étape</h2>
-            <div class="instruction" id="stepInstruction">...</div>
-
-            <!-- Zone d'image d'illustration de l'étape en cours -->
-            <div id="stepImageBox">
-                <img id="stepImage" alt="">
-                <div id="stepImageCaption"></div>
+        <div class="status-box">
+            <div class="actions">
+                <button id="btnConnect" class="btn">Établir la connexion</button>
+                <button id="btnConnectAny" class="btn btn-secondary" disabled>Chercher tous les ports</button>
+                <button id="btnDisconnect" class="btn btn-danger" disabled>Déconnecter</button>
+                <button id="btnFlash" class="btn btn-warning" disabled>Reflasher firmware.bin</button>
             </div>
 
-            <div class="action-zone">
-                <div id="manualActions" style="display:none;">
-                    <p id="manualQuestion">Est-ce que le comportement observé sur la carte est correct ?</p>
-                    <button id="btnYes" class="btn btn-success">OUI (Conforme)</button>
-                    <button id="btnNo" class="btn btn-danger">NON (Défaillant)</button>
-                </div>
-                <div id="autoActions">
-                    <p>En attente de validation automatique. Si un élément est défectueux ou intestable, vous pouvez forcer la fin de cette étape :</p>
-                    <button id="btnForceFail" class="btn btn-warning">Terminer l'étape (éléments non testés = défaut)</button>
-                </div>
+            <span id="connStatus">Déconnecté</span>
+
+            <div class="info-line">
+                <strong>Port sélectionné</strong>
+                <span id="lblPort">Aucun</span>
             </div>
-
-            <div class="live-data" id="stepLiveData">Données en attente...</div>
+            <div class="info-line">
+                <strong>Numéro de série (eFuse)</strong>
+                <span id="lblSN">Lecture en cours...</span>
+            </div>
+            <div class="info-line">
+                <strong>Version firmware</strong>
+                <span id="lblFwVersion">—</span>
+                <span id="lblFwStatus" style="margin-left: 6px; font-weight: bold;"></span>
+            </div>
+            <div class="info-line">
+                <strong>Écran LCD détecté</strong>
+                <span id="lblLcd">—</span>
+            </div>
         </div>
-    </div>
+    </aside>
 
-    <div id="reportZone" style="display:none;">
-        <h2>Diagnostic Terminé</h2>
-        <button id="btnDownloadReport" class="btn btn-success">Télécharger le Rapport de Test (.txt)</button>
-        <button id="btnTestAnother" class="btn">Tester une autre carte</button>
-        <div id="reportArea"></div>
-    </div>
+    <!-- ============================================================ -->
+    <!-- VOLET DROIT : étapes puis rapport                            -->
+    <!-- ============================================================ -->
+    <main class="main">
+
+        <div id="testZone" style="display:none;">
+            <div class="step-card active" id="stepCard">
+                <h2 id="stepTitle">Étape</h2>
+                <div class="instruction" id="stepInstruction">...</div>
+
+                <div id="stepImageBox">
+                    <img id="stepImage" alt="">
+                    <div id="stepImageCaption"></div>
+                </div>
+
+                <div class="action-zone">
+                    <div id="manualActions" style="display:none;">
+                        <p id="manualQuestion">Est-ce que le comportement observé sur la carte est correct ?</p>
+                        <button id="btnYes" class="btn btn-success">OUI (Conforme)</button>
+                        <button id="btnNo" class="btn btn-danger">NON (Défaillant)</button>
+                    </div>
+                    <div id="autoActions">
+                        <p>En attente de validation automatique. Si un élément est défectueux ou intestable, vous pouvez forcer la fin de cette étape :</p>
+                        <button id="btnForceFail" class="btn btn-warning">Terminer l'étape (éléments non testés = défaut)</button>
+                    </div>
+                </div>
+
+                <div class="live-data" id="stepLiveData">Données en attente...</div>
+            </div>
+        </div>
+
+        <div id="reportZone" style="display:none;">
+            <h2>Diagnostic Terminé</h2>
+            <button id="btnDownloadReport" class="btn btn-success">Télécharger le Rapport de Test (.txt)</button>
+            <button id="btnTestAnother" class="btn">Tester une autre carte</button>
+            <div id="reportArea"></div>
+        </div>
+
+    </main>
 </div>
 
 <!-- Overlay de flashage -->
