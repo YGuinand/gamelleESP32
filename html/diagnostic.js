@@ -1,7 +1,7 @@
 /* ==========================================================================
    Banc de diagnostic ESP32 - IUT de Cachan
    Logique de test + génération du rapport + reflashage automatique.
-   Handshake SN + V + L avec polling et reset DTR/RTS de secours.
+   Handshake SN + V + L optimisé (polling conditionnel, délais réduits).
    ========================================================================== */
 
 /* ----------------------------------------------------------------------
@@ -10,9 +10,13 @@
 const FIRMWARE_URL = "firmware.factory.bin";
 const FIRMWARE_FLASH_ADDR = 0x0;
 const ESPTOOL_CDN = "https://cdn.jsdelivr.net/npm/esptool-js@0.5.4/bundle.js";
-const SN_TIMEOUT_MS = 4000;
-const HANDSHAKE_TIMEOUT_MS = 2000;
-const HANDSHAKE_POLL_MS = 400;
+
+// Handshake : délais resserrés (cf. discussion — la carte répond en 10-50 ms)
+const SN_TIMEOUT_MS            = 1500;   // était 4000
+const HANDSHAKE_TIMEOUT_MS     = 800;    // était 2000
+const HANDSHAKE_POLL_MS        = 150;    // était 400
+const HANDSHAKE_FIRST_POLL_MS  = 50;     // NOUVEAU — délai du premier envoi
+
 const POST_FLASH_DELAY_MS = 2500;
 const AUTO_FLASH_RETRY_LIMIT = 1;
 
@@ -272,12 +276,10 @@ async function connectSerial(allowAny, existingPort = null) {
         btnDisconnect.disabled = false;
         btnFlash.disabled = false;
 
-        // Le testZone reste masqué jusqu'à ce que le handshake soit terminé
-        // et que startStep() affiche le contenu de la première étape.
-        // Comme ça, aucune étape fantôme n'apparaît pendant la connexion.
+        // Le testZone reste masqué tant que startStep() n'a pas affiché son contenu.
         reportZone.style.display = "none";
 
-        // Arme le watchdog d'absence totale de réponse
+        // Watchdog d'absence totale de réponse
         snTimeoutHandle = setTimeout(handleNoResponse, SN_TIMEOUT_MS);
 
         // Prépare le handshake (SN + V + L)
@@ -285,17 +287,19 @@ async function connectSerial(allowAny, existingPort = null) {
         if (handshakeTimeoutHandle) { clearTimeout(handshakeTimeoutHandle); handshakeTimeoutHandle = null; }
         if (handshakePollHandle)    { clearInterval(handshakePollHandle);   handshakePollHandle = null; }
 
-        // Réémission périodique tant que le handshake n'est pas terminé.
+        // Polling conditionnel : on n'envoie que ce qu'on n'a pas encore reçu.
+        // Dès que le firmware a émis SN, V et L spontanément (ce qu'il fait au boot),
+        // le navigateur peut recevoir les trois lignes sans avoir rien envoyé.
         setTimeout(() => {
             const pollOnce = () => {
                 if (handshakeDone) return;
-                sendCommand("SN");
-                sendCommand("V");
-                sendCommand("L");
+                if (serialNumber === "INCONNU") sendCommand("SN");
+                if (firmwareVersion === null)   sendCommand("V");
+                if (lcdType === null)           sendCommand("L");
             };
             pollOnce();
             handshakePollHandle = setInterval(pollOnce, HANDSHAKE_POLL_MS);
-        }, 200);
+        }, HANDSHAKE_FIRST_POLL_MS);
 
         // Timeout global : tentative de reset matériel DTR/RTS
         handshakeTimeoutHandle = setTimeout(async () => {
@@ -315,7 +319,7 @@ async function connectSerial(allowAny, existingPort = null) {
                     console.warn("Démarrage du diagnostic en mode dégradé.");
                     maybeStartDiagnostic(true);
                 }
-            }, 1500);
+            }, 800);
         }, SN_TIMEOUT_MS + HANDSHAKE_TIMEOUT_MS);
 
         readSerialLoop();
@@ -387,7 +391,6 @@ function resetUIAfterDisconnect() {
     lblLcd.style.color = "#dc3545";
 
     // Nettoie les textes résiduels pour éviter tout affichage fantôme
-    // si le testZone redevenait visible par erreur.
     stepTitleEl.textContent = "Étape";
     stepInstructionEl.textContent = "...";
     stepLiveData.textContent = "Données en attente...";
@@ -488,8 +491,12 @@ async function maybeStartDiagnostic(force = false) {
     if (!force && !(hasSn && hasV && hasL)) return;
 
     handshakeDone = true;
+
+    // On stoppe TOUT de suite le polling et les timeouts, AVANT le
+    // checkFirmwareFreshness() qui peut afficher un confirm() bloquant.
     if (handshakeTimeoutHandle) { clearTimeout(handshakeTimeoutHandle); handshakeTimeoutHandle = null; }
     if (handshakePollHandle)    { clearInterval(handshakePollHandle);   handshakePollHandle = null; }
+    if (snTimeoutHandle)        { clearTimeout(snTimeoutHandle);        snTimeoutHandle = null; }
 
     if (hasSn) {
         await checkFirmwareFreshness();
@@ -697,8 +704,6 @@ async function flashFirmwareAndRetry() {
         resetAllState();
         lblSN.textContent = "Lecture en cours... (Veuillez connecter la carte)";
         lblSN.style.color = "#dc3545";
-        // On ne réaffiche pas testZone ici : c'est startStep() qui s'en charge
-        // après le handshake, pour éviter d'afficher une étape fantôme.
         reportZone.style.display = "none";
         await connectSerial(false, portToUse);
 
@@ -898,7 +903,7 @@ function startStep(index) {
     const step = steps[index];
 
     // Affiche le testZone uniquement au moment où le contenu est prêt.
-    // Ça évite d'afficher une étape fantôme lors de la reconnexion.
+    // Évite d'afficher une étape fantôme lors de la reconnexion.
     testZone.style.display = "block";
 
     stepTitleEl.textContent = `Étape ${index + 1} / ${steps.length} : ${step.title}`;
