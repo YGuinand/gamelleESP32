@@ -271,7 +271,10 @@ async function connectSerial(allowAny, existingPort = null) {
         btnConnectAny.disabled = true;
         btnDisconnect.disabled = false;
         btnFlash.disabled = false;
-        testZone.style.display = "block";
+
+        // Le testZone reste masqué jusqu'à ce que le handshake soit terminé
+        // et que startStep() affiche le contenu de la première étape.
+        // Comme ça, aucune étape fantôme n'apparaît pendant la connexion.
         reportZone.style.display = "none";
 
         // Arme le watchdog d'absence totale de réponse
@@ -294,7 +297,7 @@ async function connectSerial(allowAny, existingPort = null) {
             handshakePollHandle = setInterval(pollOnce, HANDSHAKE_POLL_MS);
         }, 200);
 
-        // Timeout global : tentative de reset matériel DTR/RTS pour rejouer setup()
+        // Timeout global : tentative de reset matériel DTR/RTS
         handshakeTimeoutHandle = setTimeout(async () => {
             if (handshakeDone) return;
             console.warn("Handshake incomplet — tentative de reset matériel DTR/RTS…");
@@ -382,6 +385,12 @@ function resetUIAfterDisconnect() {
     lblFwStatus.className = "";
     lblLcd.textContent = "—";
     lblLcd.style.color = "#dc3545";
+
+    // Nettoie les textes résiduels pour éviter tout affichage fantôme
+    // si le testZone redevenait visible par erreur.
+    stepTitleEl.textContent = "Étape";
+    stepInstructionEl.textContent = "...";
+    stepLiveData.textContent = "Données en attente...";
 }
 
 function resetAllState() {
@@ -688,7 +697,8 @@ async function flashFirmwareAndRetry() {
         resetAllState();
         lblSN.textContent = "Lecture en cours... (Veuillez connecter la carte)";
         lblSN.style.color = "#dc3545";
-        testZone.style.display = "block";
+        // On ne réaffiche pas testZone ici : c'est startStep() qui s'en charge
+        // après le handshake, pour éviter d'afficher une étape fantôme.
         reportZone.style.display = "none";
         await connectSerial(false, portToUse);
 
@@ -827,19 +837,25 @@ function adjustStepsForLcd(type) {
     if (!step) return;
 
     if (type === 0) {
+        // Aucun écran : le bouton bleu n'a pas d'effet visuel, mais on
+        // vérifie quand même sa détection électrique.
         step.items = [
             { key: "jaune", btnId: 1, label: "Appui bouton JAUNE : la LED jaune s'allume" },
-            { key: "vert",  btnId: 2, label: "Appui bouton VERT : la LED verte s'allume" }
+            { key: "vert",  btnId: 2, label: "Appui bouton VERT : la LED verte s'allume" },
+            { key: "bleu",  btnId: 3, label: "Appui bouton BLEU : la détection est enregistrée automatiquement (aucun effet visuel sans écran)" }
         ];
-        step.instruction = "Aucun écran détecté — test des LEDs uniquement. Appuyez successivement sur JAUNE puis VERT.";
+        step.instruction = "Aucun écran détecté — test des LEDs et de la détection des 3 boutons. Appuyez successivement sur JAUNE, VERT puis BLEU.";
         step.title = "Test Boutons + LEDs (sans écran)";
     } else if (type === 1) {
+        // Écran monochrome : pas de rétroéclairage RGB, mais le bouton bleu
+        // reste testé électriquement (détection uniquement).
         step.items = [
             { key: "repos", btnId: null, label: "L'écran s'allume et affiche 'IUT de Cachan' + le SN (sans couleur particulière)" },
             { key: "jaune", btnId: 1,    label: "Appui bouton JAUNE : la LED jaune s'allume" },
-            { key: "vert",  btnId: 2,    label: "Appui bouton VERT : la LED verte s'allume" }
+            { key: "vert",  btnId: 2,    label: "Appui bouton VERT : la LED verte s'allume" },
+            { key: "bleu",  btnId: 3,    label: "Appui bouton BLEU : la détection est enregistrée automatiquement (le rétroéclairage RGB est absent)" }
         ];
-        step.instruction = "Écran monochrome détecté — validez l'affichage puis les LEDs. Le rétroéclairage RGB n'est pas disponible.";
+        step.instruction = "Écran monochrome détecté — validez l'affichage puis les LEDs, et vérifiez la détection des 3 boutons. Le rétroéclairage RGB n'est pas disponible.";
         step.title = "Test Boutons + LEDs + Écran monochrome";
     } else {
         step.title = "Test Boutons + LEDs + Rétroéclairage LCD";
@@ -880,6 +896,10 @@ function startStep(index) {
     if (index >= steps.length) { endDiagnostic(); return; }
     currentStepIndex = index;
     const step = steps[index];
+
+    // Affiche le testZone uniquement au moment où le contenu est prêt.
+    // Ça évite d'afficher une étape fantôme lors de la reconnexion.
+    testZone.style.display = "block";
 
     stepTitleEl.textContent = `Étape ${index + 1} / ${steps.length} : ${step.title}`;
     stepInstructionEl.textContent = step.instruction;
